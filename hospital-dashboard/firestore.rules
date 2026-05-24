@@ -1,0 +1,164 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return signedIn() ? userDoc().role : null;
+    }
+
+    function hospitalId() {
+      return signedIn() ? userDoc().hospitalId : null;
+    }
+
+    function sameHospital() {
+      return resource.data.hospitalId == hospitalId();
+    }
+
+    function incomingSameHospital() {
+      return request.resource.data.hospitalId == hospitalId();
+    }
+
+    function approvalStatusUnchanged() {
+      return !('approvalStatus' in request.resource.data.diff(resource.data).affectedKeys());
+    }
+
+    function credentialFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'uid',
+        'credentialsCreatedAt',
+        'passwordChanged'
+      ]);
+    }
+
+    function driverOwnDoc() {
+      return resource.data.uid == request.auth.uid;
+    }
+
+    function driverPasswordChangedOnly() {
+      return driverOwnDoc()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['passwordChanged'])
+        && resource.data.passwordChanged == false
+        && request.resource.data.passwordChanged == true;
+    }
+
+    function onlyApprovalStatusChangedByAdmin() {
+      return role() == 'admin'
+        || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['approvalStatus']);
+    }
+
+    function isActiveDriverLocationWrite() {
+      let ambulance = get(/databases/$(database)/documents/ambulances/$(request.resource.data.ambulanceId)).data;
+      return role() == 'driver'
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.hospitalId == ambulance.hospitalId
+        && ambulance.activeDriverId == request.auth.uid;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (role() == 'admin' || uid == request.auth.uid);
+      allow write: if signedIn() && role() == 'admin';
+    }
+
+    match /drivers/{driverId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+        || (role() == 'driver' && driverOwnDoc())
+      );
+
+      allow create: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin'
+          && incomingSameHospital()
+          && request.resource.data.approvalStatus == 'pending')
+      );
+
+      allow update: if signedIn() && (
+        (role() == 'admin' && onlyApprovalStatusChangedByAdmin())
+        || (role() == 'hospital_admin'
+          && sameHospital()
+          && incomingSameHospital()
+          && approvalStatusUnchanged()
+          && credentialFieldsUnchanged())
+        || (role() == 'driver' && driverPasswordChangedOnly())
+      );
+
+      allow delete: if signedIn() && role() == 'admin';
+    }
+
+    match /ambulances/{ambulanceId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+        || (role() == 'driver' && resource.data.activeDriverId == request.auth.uid)
+      );
+
+      allow create: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin'
+          && incomingSameHospital()
+          && request.resource.data.approvalStatus == 'pending')
+      );
+
+      allow update: if signedIn() && (
+        (role() == 'admin' && onlyApprovalStatusChangedByAdmin())
+        || (role() == 'hospital_admin' && sameHospital() && incomingSameHospital() && approvalStatusUnchanged())
+        || (role() == 'driver'
+          && resource.data.approvalStatus == 'approved'
+          && request.auth.uid in resource.data.assignedDrivers
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activeDriverId'])
+          && (request.resource.data.activeDriverId == request.auth.uid || request.resource.data.activeDriverId == null))
+      );
+
+      allow delete: if signedIn() && role() == 'admin';
+    }
+
+    match /emergencies/{emergencyId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+        || (role() == 'driver' && resource.data.driverId == request.auth.uid)
+      );
+      allow write: if signedIn() && role() == 'admin';
+    }
+
+    match /live_locations/{ambulanceId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+        || (role() == 'driver' && resource.data.driverId == request.auth.uid)
+      );
+      allow write: if signedIn() && isActiveDriverLocationWrite();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+      );
+      allow create: if signedIn() && role() == 'admin';
+      allow update: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital() && incomingSameHospital()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']))
+      );
+      allow delete: if signedIn() && role() == 'admin';
+    }
+
+    match /analytics/{analyticsId} {
+      allow read: if signedIn() && (
+        role() == 'admin'
+        || (role() == 'hospital_admin' && sameHospital())
+      );
+      allow write: if signedIn() && role() == 'admin';
+    }
+  }
+}
