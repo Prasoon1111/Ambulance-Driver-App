@@ -8,10 +8,10 @@ export default function Select({ className, label, options = [], ...props }) {
         className,
       )}
       {...props}
-    >
+  >
       {options.map((option) => (
-        <option key={option} value={option}>
-          {option}
+        <option key={typeof option === "string" ? option : option.value} value={typeof option === "string" ? option : option.value}>
+          {typeof option === "string" ? option : option.label}
         </option>
       ))}
     </select>

@@ -2,25 +2,75 @@ import Input from "../ui/Input.jsx";
 import Select from "../ui/Select.jsx";
 
 export const driverDefaults = {
-  name: "",
+  fullName: "",
+  address: "",
   phone: "",
-  ambulance: "Unassigned",
-  hospital: "",
-  status: "Available",
-  shift: "07:00-19:00",
+  email: "",
+  gender: "Male",
+  hospitalName: "",
+  aadharNumber: "",
+  drivingLicenseNumber: "",
+  aadhaarStatus: "pending",
+  licenceStatus: "pending",
+  verificationStatus: "pending",
+  submittedAt: "",
+  documents: {
+    aadhaarCard: null,
+    drivingLicense: null,
+    profilePhoto: null,
+  },
 };
 
-export default function DriverForm({ value, onChange, hospitals, ambulances }) {
+function fileToDocument(file, label) {
+  if (!file) return null;
+  return {
+    label,
+    name: file.name,
+    type: file.type,
+    url: URL.createObjectURL(file),
+  };
+}
+
+function FileInput({ label, accept, onChange }) {
+  return (
+    <label className="grid gap-1.5 text-sm font-medium text-slate-700">
+      {label}
+      <input
+        type="file"
+        accept={accept}
+        className="focus-ring block w-full rounded-md border border-slate-200 bg-white text-sm text-slate-700 file:mr-3 file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700"
+        onChange={(event) => onChange(event.target.files?.[0] || null)}
+      />
+    </label>
+  );
+}
+
+export default function DriverForm({ value, onChange, hospitals }) {
   const update = (field, nextValue) => onChange({ ...value, [field]: nextValue });
+  const updateDocument = (field, file, label) =>
+    onChange({
+      ...value,
+      documents: {
+        ...value.documents,
+        [field]: fileToDocument(file, label),
+      },
+    });
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      <Input label="Driver name" value={value.name} onChange={(event) => update("name", event.target.value)} />
+      <Input label="Full name" value={value.fullName} onChange={(event) => update("fullName", event.target.value)} />
       <Input label="Phone" value={value.phone} onChange={(event) => update("phone", event.target.value)} />
-      <Select label="Assigned ambulance" value={value.ambulance} onChange={(event) => update("ambulance", event.target.value)} options={["Unassigned", ...ambulances.map((item) => item.id)]} />
-      <Select label="Assigned hospital" value={value.hospital} onChange={(event) => update("hospital", event.target.value)} options={["", ...hospitals.map((item) => item.name)]} />
-      <Select label="Status" value={value.status} onChange={(event) => update("status", event.target.value)} options={["Available", "On Call", "Dispatched", "Break", "Offline"]} />
-      <Input label="Shift" value={value.shift} onChange={(event) => update("shift", event.target.value)} />
+      <Input label="Email" type="email" value={value.email} onChange={(event) => update("email", event.target.value)} />
+      <Select label="Gender" value={value.gender} onChange={(event) => update("gender", event.target.value)} options={["Male", "Female", "Other"]} />
+      <Select label="Hospital name" value={value.hospitalName} onChange={(event) => update("hospitalName", event.target.value)} options={["", ...hospitals.map((item) => item.name)]} />
+      <Input label="Aadhaar number" value={value.aadharNumber} onChange={(event) => update("aadharNumber", event.target.value)} />
+      <Input label="Driving licence number" value={value.drivingLicenseNumber} onChange={(event) => update("drivingLicenseNumber", event.target.value)} />
+      <div className="sm:col-span-2">
+        <Input label="Address" value={value.address} onChange={(event) => update("address", event.target.value)} />
+      </div>
+      <FileInput label="Aadhaar card" accept="image/*,.pdf" onChange={(file) => updateDocument("aadhaarCard", file, "Aadhaar card")} />
+      <FileInput label="Driving licence" accept="image/*,.pdf" onChange={(file) => updateDocument("drivingLicense", file, "Driving licence")} />
+      <FileInput label="Profile photo" accept="image/*" onChange={(file) => updateDocument("profilePhoto", file, "Profile photo")} />
     </div>
   );
 }

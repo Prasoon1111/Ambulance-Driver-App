@@ -1,47 +1,63 @@
-import { Plus } from "lucide-react";
 import { useMemo, useState } from "react";
-import DriverForm, { driverDefaults } from "../../components/drivers/DriverForm.jsx";
-import DriversTable from "../../components/drivers/DriversTable.jsx";
-import Button from "../../components/ui/Button.jsx";
+import DataTable from "../../components/ui/DataTable.jsx";
+import DocumentViewerModal from "../../components/ui/DocumentViewerModal.jsx";
 import Input from "../../components/ui/Input.jsx";
-import Modal from "../../components/ui/Modal.jsx";
 import PageHeader from "../../components/ui/PageHeader.jsx";
 import Select from "../../components/ui/Select.jsx";
+import StatusBadge from "../../components/ui/StatusBadge.jsx";
 import { useOps } from "../../context/OpsContext.jsx";
-import { matchesSearch } from "../../utils/formatters.js";
+import { formatDateTime, matchesSearch } from "../../utils/formatters.js";
+
+function driverDocuments(driver) {
+  return [driver.documents?.aadhaarCard, driver.documents?.drivingLicense, driver.documents?.profilePhoto];
+}
 
 export default function Drivers() {
-  const { drivers, driversActions, hospitals, ambulances } = useOps();
+  const { drivers } = useOps();
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("All statuses");
-  const [modal, setModal] = useState(null);
-  const [draft, setDraft] = useState(driverDefaults);
+  const [hospital, setHospital] = useState("All hospitals");
+  const [selectedDriver, setSelectedDriver] = useState(null);
+  const hospitals = ["All hospitals", ...Array.from(new Set(drivers.map((driver) => driver.hospitalName)))];
 
   const rows = useMemo(
-    () => drivers.filter((driver) => (status === "All statuses" || driver.status === status) && matchesSearch(driver, query, ["name", "phone", "ambulance", "hospital"])),
-    [drivers, query, status],
+    () =>
+      drivers.filter(
+        (driver) =>
+          (hospital === "All hospitals" || driver.hospitalName === hospital) &&
+          matchesSearch(driver, query, ["fullName", "phone", "hospitalName", "email"]),
+      ),
+    [drivers, query, hospital],
   );
-
-  const submit = () => {
-    if (modal === "edit") driversActions.update(draft.id, draft);
-    if (modal === "add") driversActions.add(draft);
-    setModal(null);
-  };
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Drivers" description="Manage driver assignments, dispatch readiness, and shift coverage." actions={<Button onClick={() => { setDraft(driverDefaults); setModal("add"); }}><Plus className="h-4 w-4" />Add driver</Button>} />
-      <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 sm:flex-row">
-        <Input placeholder="Search drivers..." value={query} onChange={(event) => setQuery(event.target.value)} />
-        <Select className="sm:w-52" value={status} onChange={(event) => setStatus(event.target.value)} options={["All statuses", "Available", "On Call", "Dispatched", "Break", "Offline"]} />
+      <PageHeader
+        title="Drivers"
+        description="Verified driver accounts from the main drivers collection. Login access is enabled only after approval."
+      />
+      <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-[minmax(220px,1fr)_240px]">
+        <Input placeholder="Search verified drivers..." value={query} onChange={(event) => setQuery(event.target.value)} />
+        <Select value={hospital} onChange={(event) => setHospital(event.target.value)} options={hospitals} />
       </div>
-      <DriversTable rows={rows} onEdit={(record) => { setDraft(record); setModal("edit"); }} onDelete={(record) => { setDraft(record); setModal("delete"); }} />
-      <Modal open={modal === "add" || modal === "edit"} title={modal === "edit" ? "Edit driver" : "Add driver"} onClose={() => setModal(null)} footer={<><Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button><Button onClick={submit}>{modal === "edit" ? "Save changes" : "Create driver"}</Button></>}>
-        <DriverForm value={draft} onChange={setDraft} hospitals={hospitals} ambulances={ambulances} />
-      </Modal>
-      <Modal open={modal === "delete"} title="Delete driver" description={`Remove ${draft.name} from the driver registry.`} onClose={() => setModal(null)} footer={<><Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button><Button variant="danger" onClick={() => { driversActions.remove(draft.id); setModal(null); }}>Delete</Button></>}>
-        <p className="text-sm text-slate-600">Driver assignment history can be preserved later through Firestore audit collections.</p>
-      </Modal>
+      <DataTable
+        rows={rows}
+        emptyTitle="No verified drivers found"
+        columns={[
+          { key: "fullName", header: "Driver", render: (row) => <div><p className="font-medium text-slate-950">{row.fullName}</p><p className="text-xs text-slate-500">{row.id}</p></div> },
+          { key: "hospitalName", header: "Hospital" },
+          { key: "phone", header: "Phone" },
+          { key: "email", header: "Email" },
+          { key: "accountAccess", header: "Login Access", render: (row) => <StatusBadge status={row.accountAccess ? "Approved" : "Pending"} /> },
+          { key: "approvedAt", header: "Approved Date", render: (row) => formatDateTime(row.approvedAt) },
+          { key: "documents", header: "", render: (row) => <button className="text-sm font-medium text-slate-700 hover:text-slate-950" type="button" onClick={() => setSelectedDriver(row)}>View Documents</button> },
+        ]}
+      />
+      <DocumentViewerModal
+        open={Boolean(selectedDriver)}
+        title={selectedDriver ? `${selectedDriver.fullName} documents` : "Driver documents"}
+        documents={selectedDriver ? driverDocuments(selectedDriver) : []}
+        onClose={() => setSelectedDriver(null)}
+      />
     </div>
   );
 }

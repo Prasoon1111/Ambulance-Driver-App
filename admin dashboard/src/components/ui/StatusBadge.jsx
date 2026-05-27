@@ -21,6 +21,10 @@ const styles = {
   Break: "bg-slate-100 text-slate-700 ring-slate-500/20",
   Maintenance: "bg-slate-100 text-slate-700 ring-slate-500/20",
   Offline: "bg-slate-100 text-slate-600 ring-slate-500/20",
+  Pending: "bg-yellow-50 text-yellow-800 ring-yellow-600/25",
+  Approved: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
+  Rejected: "bg-red-50 text-red-700 ring-red-600/20",
+  "Resubmission Required": "bg-orange-50 text-orange-700 ring-orange-600/20",
 };
 
 export default function StatusBadge({ status, className }) {

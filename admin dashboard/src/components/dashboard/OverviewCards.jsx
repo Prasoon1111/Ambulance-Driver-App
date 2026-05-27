@@ -1,13 +1,13 @@
-import { Activity, Ambulance, Building2, Timer } from "lucide-react";
+import { Ambulance, CheckCircle2, ClipboardCheck, OctagonX, UserCheck } from "lucide-react";
 import { Card, CardContent } from "../ui/Card.jsx";
 
-const icons = [Activity, Ambulance, Building2, Timer];
+const icons = [UserCheck, Ambulance, ClipboardCheck, CheckCircle2, OctagonX];
 
 export default function OverviewCards({ stats }) {
   return (
-    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
       {stats.map((stat, index) => {
-        const Icon = icons[index] || Activity;
+        const Icon = icons[index] || ClipboardCheck;
         return (
           <Card key={stat.label}>
             <CardContent className="p-4">
@@ -22,7 +22,7 @@ export default function OverviewCards({ stats }) {
               </div>
               <div className="mt-4 flex items-center justify-between gap-3 text-xs">
                 <span className="text-slate-500">{stat.detail}</span>
-                <span className={stat.tone === "danger" ? "font-medium text-red-600" : "font-medium text-emerald-700"}>
+                <span className={stat.tone === "warning" ? "font-medium text-amber-700" : stat.tone === "danger" ? "font-medium text-red-600" : "font-medium text-emerald-700"}>
                   {stat.trend}
                 </span>
               </div>

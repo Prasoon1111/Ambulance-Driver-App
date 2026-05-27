@@ -1,3 +1,7 @@
+import { getFirebaseAuth } from "../firebase/client";
+import { validateAdminAccess }
+from "../services/auth/adminAuthService";
+
 import {
   ArrowRight,
   LockKeyhole,
@@ -13,6 +17,9 @@ export default function Login() {
   const navigate = useNavigate();
   const { isAuthenticated, login } = useAuth();
   const [remember, setRemember] = useState(true);
+  const [email, setEmail] = useState("");
+const [password, setPassword] = useState("");
+const [error, setError] = useState("");
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -20,10 +27,39 @@ export default function Login() {
     }
   }, [isAuthenticated, navigate]);
 
-  function handleSubmit(event) {
-    event.preventDefault();
+  async function handleSubmit(event) {
+  event.preventDefault();
+
+  try {
+    const auth = await getFirebaseAuth();
+
+    const { signInWithEmailAndPassword } =
+      await import("firebase/auth");
+
+    await signInWithEmailAndPassword(
+      auth,
+      email,
+      password
+    );
+    const isAdmin = await validateAdminAccess(
+  auth.currentUser.uid
+);
+
+if (!isAdmin) {
+  await auth.signOut();
+
+  setError("Unauthorized admin access");
+
+  return;
+}
+
     login();
+
     navigate("/admin/dashboard");
+
+  } catch (err) {
+    console.error(err);
+setError("Incorrect admin credentials");}
   }
 
   return (
@@ -82,7 +118,8 @@ export default function Login() {
                   <Mail size={18} className="text-slate-400" />
                   <input
                     type="email"
-                    defaultValue="admin@resqops.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     className="min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400"
                     placeholder="admin@resqops.com"
                   />
@@ -94,13 +131,19 @@ export default function Login() {
                 <span className="mt-2 flex h-11 items-center gap-3 rounded-md border border-slate-200 bg-white px-3">
                   <LockKeyhole size={18} className="text-slate-400" />
                   <input
-                    type="password"
-                    defaultValue="resqops-admin"
-                    className="min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400"
-                    placeholder="Enter password"
-                  />
+                  type="password"
+                  value={password}
+  onChange={(e) => setPassword(e.target.value)}
+  className="min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400"
+  placeholder="Enter password"
+/>
                 </span>
               </label>
+              {error && (
+  <p className="mt-2 text-sm text-red-500">
+    {error}
+  </p>
+)}
             </div>
 
             <div className="mt-5 flex items-center justify-between gap-4">

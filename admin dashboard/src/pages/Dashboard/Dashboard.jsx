@@ -7,7 +7,7 @@ import PageHeader from "../../components/ui/PageHeader.jsx";
 import { useOps } from "../../context/OpsContext.jsx";
 
 export default function Dashboard() {
-  const { overviewStats, emergencies, activityLogs, systemPanels, ambulances } = useOps();
+  const { overviewStats, operationalStats, emergencies, activityLogs, systemPanels, ambulances } = useOps();
 
   return (
     <div className="space-y-6">
@@ -16,6 +16,7 @@ export default function Dashboard() {
         description="Global emergency coordination overview for hospitals, drivers, ambulances, and platform health."
       />
       <OverviewCards stats={overviewStats} />
+      <OverviewCards stats={operationalStats} />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.75fr)]">
         <div className="space-y-6">
           <ActiveEmergenciesPanel emergencies={emergencies} />

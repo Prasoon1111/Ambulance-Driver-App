@@ -2,6 +2,7 @@ import {
   Activity,
   Ambulance,
   Building2,
+  CheckSquare,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -17,6 +18,15 @@ import Button from "../ui/Button.jsx";
 
 const navItems = [
   { label: "Dashboard", to: "/admin/dashboard", icon: LayoutDashboard },
+  {
+    label: "Verification Center",
+    icon: CheckSquare,
+    children: [
+      { label: "Pending Drivers", to: "/admin/verification/pending-drivers" },
+      { label: "Pending Ambulances", to: "/admin/verification/pending-ambulances" },
+      { label: "Rejected Requests", to: "/admin/verification/rejected-requests" },
+    ],
+  },
   { label: "Hospitals", to: "/admin/hospitals", icon: Building2 },
   { label: "Drivers", to: "/admin/drivers", icon: UsersRound },
   { label: "Ambulances", to: "/admin/ambulances", icon: Ambulance },
@@ -52,24 +62,57 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile, onToggle
 
       <nav className="flex-1 space-y-1 px-3 py-4">
         {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            onClick={onCloseMobile}
-            className={({ isActive }) =>
-              cn(
-                "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
-                isActive
-                  ? "bg-slate-950 text-white"
-                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-950",
-                collapsed && "justify-center px-0",
-              )
-            }
-            title={collapsed ? item.label : undefined}
-          >
-            <item.icon className="h-4 w-4 shrink-0" />
-            {!collapsed && <span className="truncate">{item.label}</span>}
-          </NavLink>
+          item.children ? (
+            <div key={item.label} className="space-y-1">
+              <div
+                className={cn(
+                  "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-slate-600",
+                  collapsed && "justify-center px-0",
+                )}
+                title={collapsed ? item.label : undefined}
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                {!collapsed && <span className="truncate">{item.label}</span>}
+              </div>
+              {!collapsed &&
+                item.children.map((child) => (
+                  <NavLink
+                    key={child.to}
+                    to={child.to}
+                    onClick={onCloseMobile}
+                    className={({ isActive }) =>
+                      cn(
+                        "ml-7 flex h-8 items-center rounded-md px-3 text-sm font-medium transition",
+                        isActive
+                          ? "bg-slate-950 text-white"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-950",
+                      )
+                    }
+                  >
+                    {child.label}
+                  </NavLink>
+                ))}
+            </div>
+          ) : (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={onCloseMobile}
+              className={({ isActive }) =>
+                cn(
+                  "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium transition",
+                  isActive
+                    ? "bg-slate-950 text-white"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-950",
+                  collapsed && "justify-center px-0",
+                )
+              }
+              title={collapsed ? item.label : undefined}
+            >
+              <item.icon className="h-4 w-4 shrink-0" />
+              {!collapsed && <span className="truncate">{item.label}</span>}
+            </NavLink>
+          )
         ))}
       </nav>
 

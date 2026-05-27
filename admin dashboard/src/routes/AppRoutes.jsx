@@ -7,6 +7,9 @@ import Drivers from "../pages/Drivers/Drivers.jsx";
 import Emergencies from "../pages/Emergencies/Emergencies.jsx";
 import Hospitals from "../pages/Hospitals/Hospitals.jsx";
 import Settings from "../pages/Settings/Settings.jsx";
+import PendingAmbulances from "../pages/Verification/PendingAmbulances.jsx";
+import PendingDrivers from "../pages/Verification/PendingDrivers.jsx";
+import RejectedRequests from "../pages/Verification/RejectedRequests.jsx";
 import Login from "../pages/Login.jsx";
 import ProtectedRoute from "./ProtectedRoute.jsx";
 
@@ -28,6 +31,10 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="/admin/dashboard" replace /> },
           { path: "dashboard", element: <Dashboard /> },
+          { path: "verification", element: <Navigate to="/admin/verification/pending-drivers" replace /> },
+          { path: "verification/pending-drivers", element: <PendingDrivers /> },
+          { path: "verification/pending-ambulances", element: <PendingAmbulances /> },
+          { path: "verification/rejected-requests", element: <RejectedRequests /> },
           { path: "hospitals", element: <Hospitals /> },
           { path: "drivers", element: <Drivers /> },
           { path: "ambulances", element: <Ambulances /> },

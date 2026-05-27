@@ -9,7 +9,20 @@ const firebaseConfig = {
 
 let appPromise;
 
+export function hasFirebaseConfig() {
+  return Boolean(
+    firebaseConfig.apiKey &&
+      firebaseConfig.authDomain &&
+      firebaseConfig.projectId &&
+      firebaseConfig.appId,
+  );
+}
+
 export async function getFirebaseApp() {
+  if (!hasFirebaseConfig()) {
+    throw new Error("Firebase environment variables are not configured.");
+  }
+
   if (!appPromise) {
     appPromise = import("firebase/app").then(({ initializeApp, getApps }) => {
       if (getApps().length) return getApps()[0];
@@ -18,4 +31,23 @@ export async function getFirebaseApp() {
   }
 
   return appPromise;
+}
+
+export async function getFirebaseFunctions() {
+  const app = await getFirebaseApp();
+  const { getFunctions } = await import("firebase/functions");
+  return getFunctions(app);
+}
+
+export async function getFirebaseStorage() {
+  const app = await getFirebaseApp();
+  const { getStorage } = await import("firebase/storage");
+  return getStorage(app);
+}
+export async function getFirebaseAuth() {
+  const app = await getFirebaseApp();
+
+  const { getAuth } = await import("firebase/auth");
+
+  return getAuth(app);
 }

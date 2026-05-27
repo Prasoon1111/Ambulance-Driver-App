@@ -12,12 +12,12 @@ export default function AmbulanceMonitoring({ ambulances }) {
         {ambulances.slice(0, 5).map((unit) => (
           <div key={unit.id} className="flex items-center justify-between gap-4 rounded-md border border-slate-100 px-3 py-3">
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-slate-950">{unit.id} · {unit.type}</p>
-              <p className="truncate text-xs text-slate-500">{unit.hospital} · {unit.lastPing}</p>
+              <p className="truncate text-sm font-medium text-slate-950">{unit.vehicleNumber} · {unit.ambulanceType}</p>
+              <p className="truncate text-xs text-slate-500">{unit.hospitalName} · submitted {new Date(unit.submittedAt).toLocaleDateString()}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <StatusBadge status={unit.gps} />
-              <StatusBadge status={unit.status} />
+              <StatusBadge status={unit.verificationStatus === "approved" ? "Approved" : unit.verificationStatus === "rejected" ? "Rejected" : unit.verificationStatus === "pending" ? "Pending" : "Resubmission Required"} />
             </div>
           </div>
         ))}
