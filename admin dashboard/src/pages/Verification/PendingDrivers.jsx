@@ -5,6 +5,12 @@ import PageHeader from "../../components/ui/PageHeader";
 import { listenToPendingDrivers }
 from "../../services/firestore/pendingDriversService";
 
+import {
+  approveDriver,
+  rejectDriver
+}
+from "../../services/firestore/driverApprovalService";
+
 export default function PendingDrivers() {
 
   const [pendingDrivers, setPendingDrivers] =
@@ -72,6 +78,22 @@ export default function PendingDrivers() {
               <div className="mt-3 inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
                 Pending Verification
               </div>
+              <div className="mt-4 flex gap-3">
+
+              <button
+                onClick={() => approveDriver(driver.id)}
+                className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+              Approve
+              </button>
+              <button
+                onClick={() => rejectDriver(driver.id)}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+              >
+              Reject
+              </button>
+
+</div>
 
             </div>
 
