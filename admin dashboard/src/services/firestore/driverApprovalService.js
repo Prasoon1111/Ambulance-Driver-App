@@ -9,6 +9,11 @@ import {
 import { getFirebaseApp }
 from "../../firebase/client";
 
+import { createActivityLog }
+from "./activityLogService";
+
+import { getAuth } from "firebase/auth";
+
 export async function approveDriver(
   driverId
 ) {
@@ -43,6 +48,18 @@ export async function approveDriver(
     );
 
     await deleteDoc(pendingRef);
+
+    const auth = getAuth();
+const admin = auth.currentUser;
+
+await createActivityLog({
+  type: "driver_approved",
+  driverId,
+  driverName: driverData.fullName || "Unknown Driver",
+
+  adminId: admin?.uid || "unknown",
+  adminEmail: admin?.email || "unknown",
+});
 
     return {
       success: true,
@@ -96,9 +113,22 @@ export async function rejectDriver(
 
     await deleteDoc(pendingRef);
 
+    const auth = getAuth();
+const admin = auth.currentUser;
+
+await createActivityLog({
+  type: "driver_rejected",
+  driverId,
+  driverName: driverData.fullName || "Unknown Driver",
+
+  adminId: admin?.uid || "unknown",
+  adminEmail: admin?.email || "unknown",
+});
+
     return {
       success: true,
     };
+
 
   } catch (error) {
 

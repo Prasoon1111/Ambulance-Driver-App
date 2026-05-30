@@ -1,16 +1,53 @@
-import { useMemo, useState } from "react";
+
 import ActivityLogsTable from "../../components/activity/ActivityLogsTable.jsx";
 import Input from "../../components/ui/Input.jsx";
 import PageHeader from "../../components/ui/PageHeader.jsx";
 import Select from "../../components/ui/Select.jsx";
-import { useOps } from "../../context/OpsContext.jsx";
 import { matchesSearch } from "../../utils/formatters.js";
 
+import { useEffect, useMemo, useState } from "react";
+
+import { listenToActivityLogs }
+from "../../services/firestore/activityLogService";
+
 export default function ActivityLogs() {
-  const { activityLogs } = useOps();
+
+  const [activityLogs, setActivityLogs] = useState([]);
+
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("All categories");
-  const categories = ["All categories", ...Array.from(new Set(activityLogs.map((item) => item.category)))];
+
+  const [category, setCategory] =
+    useState("All categories");
+
+  useEffect(() => {
+
+    let unsubscribe;
+
+    async function setup() {
+      unsubscribe =
+        await listenToActivityLogs(
+          setActivityLogs
+        );
+    }
+
+    setup();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+
+  }, []);
+
+  const categories = [
+    "All categories",
+    ...Array.from(
+      new Set(
+        activityLogs.map(
+          (item) => item.category
+        )
+      )
+    ),
+  ];
 
   const rows = useMemo(
     () => activityLogs.filter((log) => (category === "All categories" || log.category === category) && matchesSearch(log, query, ["actor", "event", "region", "status"])),
