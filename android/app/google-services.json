@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "593139786233",
+    "project_id": "ambulance-priority-syste-a57a4",
+    "storage_bucket": "ambulance-priority-syste-a57a4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:593139786233:android:22fecd9f69fb92aff69d28",
+        "android_client_info": {
+          "package_name": "com.ambulancedriverapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "***REMOVED***"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
