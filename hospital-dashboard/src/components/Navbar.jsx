@@ -7,13 +7,12 @@ import { AuthContext } from '../context/AuthContext';
 import NotificationPanel from './NotificationPanel';
 import ProfileMenu from './ProfileMenu';
 import { useNotifications } from '../hooks/useNotifications';
-import { getHospitalById } from '../services/hospitalDataService';
 
 function Navbar() {
   const navigate = useNavigate();
   const { logout, user, role } = useContext(AuthContext);
   const { notifications, markRead } = useNotifications({ hospitalId: user?.hospitalId });
-  const assignedHospital = user?.hospitalId ? getHospitalById(user.hospitalId) : null;
+  const assignedHospital = user?.hospitalId ? { name: user.hospitalName } : null;
   const [openNotifications, setOpenNotifications] = useState(false);
   const [openProfile, setOpenProfile] = useState(false);
   const bellRef = useRef(null);
@@ -21,8 +20,18 @@ function Navbar() {
 
   useEffect(() => {
     function onDocClick(e) {
-      if (bellRef.current && !bellRef.current.contains(e.target)) setOpenNotifications(false);
-      if (profileRef.current && !profileRef.current.contains(e.target)) setOpenProfile(false);
+      if (
+        bellRef.current &&
+        !bellRef.current.contains(e.target)
+      ) {
+        setOpenNotifications(false);
+      }
+      if (
+        profileRef.current &&
+        !profileRef.current.contains(e.target)
+      ) {
+        setOpenProfile(false);
+      }
     }
     document.addEventListener('click', onDocClick);
     return () => document.removeEventListener('click', onDocClick);
@@ -38,6 +47,10 @@ function Navbar() {
     navigate('/', { replace: true });
   }
 
+  async function handleMarkRead(notificationId) {
+    await markRead(notificationId);
+  }
+
   return (
     <header className="navbar">
       <div className="navbar-title">
@@ -49,7 +62,11 @@ function Navbar() {
       </div>
 
       <div className="navbar-actions">
-        <Input className="command-search" prefix={<FiSearch />} placeholder="Search ambulance, driver, or emergency ID" />
+        <Input
+          className="command-search"
+          prefix={<FiSearch />}
+          placeholder="Search ambulance, driver, or emergency ID"
+        />
 
         <div ref={bellRef} className="notification-shell">
           <Badge count={notifications.filter((note) => !note.read).length}>
@@ -76,8 +93,14 @@ function Navbar() {
                 exit={{ opacity: 0, y: -6 }}
                 transition={{ duration: 0.18 }}
                 style={{ position: 'relative' }}
+                onClick={(e) => e.stopPropagation()}
               >
-                <NotificationPanel notifications={notifications} onClose={() => setOpenNotifications(false)} onMarkRead={markRead} />
+               <NotificationPanel
+  notifications={notifications}
+  onClose={() => setOpenNotifications(false)}
+  onMarkRead={markRead}
+/>
+
               </motion.div>
             )}
           </AnimatePresence>

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "antd": "^6.3.7",
+    "firebase": "^12.13.0",
     "framer-motion": "^12.38.0",
     "leaflet": "^1.9.4",
     "react": "^19.0.0",

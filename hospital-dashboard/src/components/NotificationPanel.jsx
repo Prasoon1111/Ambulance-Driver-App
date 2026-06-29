@@ -12,11 +12,12 @@ export default function NotificationPanel({ notifications = [], onClose, onMarkR
       style={{ width: 360, position: 'absolute', right: 0, top: 44, zIndex: 50 }}
       role="region"
       aria-label="Emergency notifications"
+      onClick={(e) => e.stopPropagation()}
     >
       <div className="notification-panel-header">
         <div>
           <p className="panel-overline">Dispatch Alerts</p>
-          <strong>Notifications</strong>
+          <strong>Notifications ({notifications.filter((n) => !n.read).length} unread)</strong>
         </div>
         <button className="icon-button small" onClick={onClose} aria-label="Close notifications">
           <FiX />
@@ -25,38 +26,55 @@ export default function NotificationPanel({ notifications = [], onClose, onMarkR
 
       <div className="notification-list">
         {notifications.length === 0 && (
-          <div className="notification-empty">
-            No notifications
-          </div>
+          <div className="notification-empty">No notifications yet</div>
         )}
 
         {notifications.map((note) => {
-          const title = note.title || note.message || note.text || 'Emergency operations update';
-          const message = note.message || note.text || title;
-          const type = note.type || 'system';
-          const timeLabel = new Date(note.timestamp).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
+          const title = note.title || note.type?.replaceAll('_', ' ') || 'System update';
+          const message = note.message || '';
+          const timeLabel = note.timestamp
+            ? new Date(
+                note.timestamp?.toDate ? note.timestamp.toDate() : note.timestamp
+              ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '';
 
           return (
             <motion.article
-              className="notification-item"
+              className={`notification-item ${note.read ? '' : 'unread'}`}
               key={note.id}
               whileHover={{ y: -1 }}
               transition={{ duration: 0.18 }}
               tabIndex={0}
-              onClick={() => onMarkRead?.(note.id)}
-              aria-label={`Notification: ${message}. Received at ${timeLabel}.`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkRead?.(note.id);
+              }}
+              style={{ opacity: note.read ? 0.7 : 1, cursor: 'pointer' }}
             >
               <div className="notification-item-top">
-                <span className={`notification-dot ${note.read ? 'read' : 'info'}`} aria-hidden="true" />
+                <span
+                  className={`notification-dot ${note.read ? 'success' : 'info'}`}
+                  aria-hidden="true"
+                />
                 <div className="notification-details">
                   <div className="notification-title-row">
                     <p className="notification-title">{title}</p>
+                    {!note.read && (
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 900,
+                        color: '#B91C1C',
+                        background: '#FEE2E2',
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        NEW
+                      </span>
+                    )}
                   </div>
-                  <p className="notification-message">{message}</p>
-                  <p className="notification-meta">{timeLabel}</p>
+                  {message && <p className="notification-message">{message}</p>}
+                  {timeLabel && <p className="notification-meta">{timeLabel}</p>}
                 </div>
               </div>
             </motion.article>

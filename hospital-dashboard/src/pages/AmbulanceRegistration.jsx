@@ -1,49 +1,88 @@
-import { useContext, useEffect, useMemo, useState } from 'react';
+import { useContext, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Button, Checkbox, Input, Select } from 'antd';
 import { AuthContext } from '../context/AuthContext';
 import {
   CAPACITIES,
   MEDICAL_CAPABILITIES,
   VEHICLE_TYPES,
-  getHospitalSnapshot,
-  submitAmbulanceRegistration,
-  subscribeHospitalData,
 } from '../services/hospitalDataService';
+import { createAmbulanceRequest, resubmitAmbulanceRequest } from '../services/hospitalRequestService';
 
 function AmbulanceRegistration() {
   const { user } = useContext(AuthContext);
-  const [form, setForm] = useState({ medicalCapabilities: [], assignedDrivers: [] });
-  const [snapshot, setSnapshot] = useState(() => getHospitalSnapshot(user.hospitalId));
+  const location = useLocation();
+  const resubmitMode = location.state?.resubmit || false;
+  const requestId = location.state?.requestId || null;
+  const prefill = location.state?.prefill || {};
+
+  const [form, setForm] = useState({
+    numberPlate: prefill.numberPlate || '',
+    manufacturer: prefill.manufacturer || '',
+    model: prefill.model || '',
+    registrationNumber: prefill.registrationNumber || '',
+    vehicleType: prefill.vehicleType || undefined,
+    capacity: prefill.capacity || undefined,
+    medicalCapabilities: prefill.medicalCapabilities || [],
+    assignedDrivers: prefill.assignedDrivers || [],
+  });
+
   const [submitted, setSubmitted] = useState(false);
-
-  useEffect(() => subscribeHospitalData(() => setSnapshot(getHospitalSnapshot(user.hospitalId))), [user.hospitalId]);
-
-  const approvedDrivers = useMemo(
-    () => snapshot.drivers.filter((driver) => driver.approvalStatus === 'approved'),
-    [snapshot.drivers]
-  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
-    submitAmbulanceRegistration(user.hospitalId, form);
-    setSubmitted(true);
+    if (!user?.hospitalId) {
+      setError('Hospital profile is missing. Please login again.');
+      return;
+    }
+    setError('');
+    setSubmitted(false);
+    setSubmitting(true);
+    try {
+      if (resubmitMode && requestId) {
+        await resubmitAmbulanceRequest(user.hospitalId, requestId, form);
+      } else {
+        await createAmbulanceRequest(user.hospitalId, form);
+        setForm({ medicalCapabilities: [], assignedDrivers: [] });
+      }
+      setSubmitted(true);
+    } catch (submitError) {
+      setError(submitError.message || 'Unable to submit ambulance request.');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
     <section className="page-stack">
       <div className="title-group compact-title">
-        <p className="eyebrow">Fleet onboarding</p>
-        <h2>Register Ambulance</h2>
+        <p className="eyebrow">{resubmitMode ? 'Resubmission' : 'Fleet onboarding'}</p>
+        <h2>{resubmitMode ? 'Edit & Resubmit Ambulance' : 'Register Ambulance'}</h2>
+        {resubmitMode && prefill.message && (
+          <div className="status-card rejected">
+            <strong>Admin feedback:</strong>
+            <span>{prefill.message}</span>
+          </div>
+        )}
       </div>
 
       {submitted && (
         <div className="status-card submitted">
-          <strong>Submitted. Awaiting admin approval.</strong>
-          <span>Hospital admins can track status but cannot approve this ambulance.</span>
+          <strong>{resubmitMode ? 'Resubmitted successfully.' : 'Submitted. Awaiting admin approval.'}</strong>
+          <span>{resubmitMode ? 'Admin will review your updated request.' : 'The request is now saved in pending_ambulances.'}</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="status-card rejected">
+          <strong>Submission failed.</strong>
+          <span>{error}</span>
         </div>
       )}
 
@@ -56,29 +95,51 @@ function AmbulanceRegistration() {
         ].map(([field, label]) => (
           <label key={field}>
             {label}
-            <Input required value={form[field] || ''} onChange={(event) => update(field, event.target.value)} />
+            <Input
+              required
+              value={form[field] || ''}
+              onChange={(event) => update(field, event.target.value)}
+            />
           </label>
         ))}
 
         <label>
           Vehicle type
-          <Select required options={VEHICLE_TYPES} onChange={(value) => update('vehicleType', value)} />
+          <Select
+            required
+            options={VEHICLE_TYPES}
+            value={form.vehicleType}
+            onChange={(value) => update('vehicleType', value)}
+          />
         </label>
+
         <label>
           Capacity
-          <Select required options={CAPACITIES.map((value) => ({ value, label: value }))} onChange={(value) => update('capacity', value)} />
+          <Select
+            required
+            options={CAPACITIES.map((value) => ({ value, label: value }))}
+            value={form.capacity}
+            onChange={(value) => update('capacity', value)}
+          />
         </label>
+
         <label className="full-span">
           Medical capabilities
-          <Checkbox.Group options={MEDICAL_CAPABILITIES} value={form.medicalCapabilities} onChange={(value) => update('medicalCapabilities', value)} />
+          <Checkbox.Group
+            options={MEDICAL_CAPABILITIES}
+            value={form.medicalCapabilities}
+            onChange={(value) => update('medicalCapabilities', value)}
+          />
         </label>
+
         <label className="full-span">
           Assigned drivers
           <Select
             mode="multiple"
             showSearch
             value={form.assignedDrivers}
-            options={approvedDrivers.map((driver) => ({ value: driver.id, label: `${driver.fullName} (${driver.licenseNumber})` }))}
+            options={[]}
+            placeholder="Driver assignment will be enabled after driver approval flow"
             onChange={(value) => update('assignedDrivers', value)}
           />
         </label>
@@ -91,11 +152,26 @@ function AmbulanceRegistration() {
         ].map(([field, label]) => (
           <label key={field}>
             {label}
-            <Input type="file" required onChange={(event) => update(field, event.target.files?.[0])} />
+            {resubmitMode && (
+              <span className="body-muted"> (only upload if you want to replace)</span>
+            )}
+            <Input
+              type="file"
+              required={!resubmitMode}
+              onChange={(event) => update(field, event.target.files?.[0])}
+            />
           </label>
         ))}
 
-        <Button type="primary" htmlType="submit" className="ops-submit">Submit for approval</Button>
+        <Button
+          type="primary"
+          htmlType="submit"
+          className="ops-submit"
+          loading={submitting}
+          disabled={submitting || submitted}
+        >
+          {submitting ? 'Submitting...' : resubmitMode ? 'Resubmit for approval' : 'Submit for approval'}
+        </Button>
       </form>
     </section>
   );

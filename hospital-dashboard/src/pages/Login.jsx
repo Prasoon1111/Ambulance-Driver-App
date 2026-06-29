@@ -6,7 +6,7 @@ import { FiLock, FiMail, FiRadio } from 'react-icons/fi';
 import { AuthContext } from '../context/AuthContext';
 
 function Login() {
-  const [email, setEmail] = useState('dispatcher@example.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -53,13 +53,19 @@ function Login() {
       const signedInUser = await login(email.trim(), password);
       const roleHome = {
         admin: '/admin/approvals',
+        super_admin: '/admin/approvals',
         hospital_admin: '/dashboard',
         driver: '/driver',
       };
+
       navigate(roleHome[signedInUser.role] || '/dashboard', { replace: true });
     } catch (authError) {
-      setError(authError.message === 'Your account is pending admin approval.' ? authError.message : 'Unable to sign in. Check your email and password.');
-    } finally {
+  setError(
+    authError.message === 'Your account is pending admin approval.'
+      ? authError.message
+      : 'Unable to sign in. Check your email and password.'
+  );
+} finally {
       setLoading(false);
     }
   };
@@ -79,7 +85,7 @@ function Login() {
         <motion.h1 variants={itemVariants}>National Healthcare Operations</motion.h1>
 
         <motion.p variants={itemVariants}>
-          Use dispatcher@example.com, admin@example.com, or driver@example.com with password 123456.
+          Sign in with your registered hospital dashboard account.
         </motion.p>
 
         <form onSubmit={handleSubmit}>
@@ -99,7 +105,7 @@ function Login() {
                 setEmail(event.target.value);
                 setError('');
               }}
-              placeholder="dispatcher@example.com"
+              placeholder="your-email@gmail.com"
               required
               disabled={loading}
             />

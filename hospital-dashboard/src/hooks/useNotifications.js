@@ -1,26 +1,38 @@
 import { useEffect, useState } from 'react';
-import { markNotificationRead, subscribeHospitalData, getHospitalSnapshot } from '../services/hospitalDataService';
+import { collection, onSnapshot, orderBy, query, where, doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 export function useNotifications({ hospitalId } = {}) {
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     if (!hospitalId) return undefined;
-    return subscribeHospitalData(() => {
+
+    const q = query(
+      collection(db, 'notifications'),
+      where('hospitalId', '==', hospitalId),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
       setNotifications(
-        getHospitalSnapshot(hospitalId).notifications
-          .map((note) => ({
-            ...note,
-            title: note.type.replaceAll('_', ' '),
-            timestamp: note.createdAt,
-          }))
-          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        snap.docs.map((item) => ({
+          id: item.id,
+          ...item.data(),
+          title: item.data().type?.replaceAll('_', ' ') || item.data().title || 'Notification',
+          message: item.data().message || '',
+          timestamp: item.data().createdAt,
+          read: item.data().read || false,
+        }))
       );
     });
+
+    return unsub;
   }, [hospitalId]);
 
-  return {
-    notifications,
-    markRead: (notificationId) => markNotificationRead(notificationId, hospitalId),
-  };
+  async function markRead(notificationId) {
+    await updateDoc(doc(db, 'notifications', notificationId), { read: true });
+  }
+
+  return { notifications, markRead };
 }

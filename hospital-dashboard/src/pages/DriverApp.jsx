@@ -1,7 +1,8 @@
 import { useContext, useEffect, useState } from 'react';
 import { Button, Input } from 'antd';
 import { AuthContext } from '../context/AuthContext';
-import { clearDriverGpsSession, getHospitalById, startDriverGpsSession, writeDriverLocation } from '../services/hospitalDataService';
+import { collection, doc, onSnapshot, query, setDoc, updateDoc, where, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
 function distanceInMetres(previous, next) {
   const radius = 6371000;
@@ -16,66 +17,76 @@ function distanceInMetres(previous, next) {
 
 function DriverApp() {
   const { user, logout, completeDriverPasswordChange } = useContext(AuthContext);
-  const [session, setSession] = useState(null);
+  const [ambulance, setAmbulance] = useState(null);
   const [message, setMessage] = useState('');
   const [lastLocation, setLastLocation] = useState(null);
   const [newPassword, setNewPassword] = useState('');
   const [passwordLoading, setPasswordLoading] = useState(false);
-  const assignedHospital = getHospitalById(user.hospitalId);
 
   useEffect(() => {
-    if (user.requiresPasswordChange) {
-      return undefined;
-    }
+    if (!user?.uid || user.requiresPasswordChange) return;
+
+    const q = query(
+      collection(db, 'ambulances'),
+      where('assignedDrivers', 'array-contains', user.uid),
+      where('approvalStatus', '==', 'approved')
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        setAmbulance({ id: snap.docs[0].id, ...snap.docs[0].data() });
+      } else {
+        setMessage('No approved ambulance assigned to you yet.');
+      }
+    });
+
+    return unsub;
+  }, [user?.uid, user?.requiresPasswordChange]);
+
+  useEffect(() => {
+    if (!ambulance || user.requiresPasswordChange) return;
 
     let watchId = null;
-    let activeSession = null;
 
-    try {
-      const nextSession = startDriverGpsSession(user.uid);
-      activeSession = nextSession;
-      setSession(nextSession);
-      setLastLocation({ lat: nextSession.location.lat, lng: nextSession.location.lng });
+    async function startSession() {
+      await updateDoc(doc(db, 'ambulances', ambulance.id), {
+        activeDriverId: user.uid,
+      });
 
-      if ('geolocation' in navigator) {
-        watchId = navigator.geolocation.watchPosition(
-          (position) => {
-            const nextLocation = {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-            };
+      watchId = navigator.geolocation.watchPosition(
+        async (position) => {
+          const nextLocation = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          };
 
-            setLastLocation((previousLocation) => {
-              if (!previousLocation || distanceInMetres(previousLocation, nextLocation) >= 10) {
-                writeDriverLocation({
-                  driverUid: user.uid,
-                  ambulanceId: nextSession.ambulance.id,
-                  lat: nextLocation.lat,
-                  lng: nextLocation.lng,
-                });
-                return nextLocation;
-              }
-              return previousLocation;
-            });
-          },
-          () => setMessage('Location permission is needed to update ambulance GPS.'),
-          { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
-        );
-      }
-    } catch (error) {
-      setMessage(error.message === 'Your account is pending admin approval.' ? error.message : 'Unable to start driver session.');
-      logout();
+          setLastLocation((prev) => {
+            if (!prev || distanceInMetres(prev, nextLocation) >= 10) {
+              setDoc(doc(db, 'live_locations', ambulance.id), {
+                ambulanceId: ambulance.id,
+                driverUid: user.uid,
+                hospitalId: user.hospitalId,
+                lat: nextLocation.lat,
+                lng: nextLocation.lng,
+                updatedAt: serverTimestamp(),
+              });
+              return nextLocation;
+            }
+            return prev;
+          });
+        },
+        () => setMessage('Location permission is needed to update ambulance GPS.'),
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
+      );
     }
 
+    startSession();
+
     return () => {
-      if (watchId !== null) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-      if (activeSession) {
-        clearDriverGpsSession({ driverUid: user.uid, ambulanceId: activeSession.ambulance.id });
-      }
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      updateDoc(doc(db, 'ambulances', ambulance.id), { activeDriverId: null });
     };
-  }, [logout, user.uid, user.requiresPasswordChange]);
+  }, [ambulance, user]);
 
   async function handlePasswordChange(event) {
     event.preventDefault();
@@ -90,17 +101,6 @@ function DriverApp() {
     } finally {
       setPasswordLoading(false);
     }
-  }
-
-  function writeMockGps() {
-    if (!session) return;
-    const nextCoords = {
-      lat: (lastLocation?.lat || session.location.lat) + 0.0001,
-      lng: (lastLocation?.lng || session.location.lng) + 0.0001,
-    };
-    writeDriverLocation({ driverUid: user.uid, ambulanceId: session.ambulance.id, ...nextCoords });
-    setLastLocation(nextCoords);
-    setMessage('GPS location written by active driver device.');
   }
 
   return (
@@ -122,17 +122,17 @@ function DriverApp() {
               minLength={8}
               required
             />
-            <Button type="primary" htmlType="submit" loading={passwordLoading}>Set password</Button>
+            <Button type="primary" htmlType="submit" loading={passwordLoading}>
+              Set password
+            </Button>
           </form>
         )}
-        {!user.requiresPasswordChange && session && (
+        {!user.requiresPasswordChange && ambulance && (
           <div className="ops-details">
-            <strong>{session.driver.fullName}</strong>
-            <span>You are assigned to {assignedHospital?.name || 'your hospital'}</span>
-            <span>{assignedHospital?.address || 'Address not available'}</span>
-            <span>Ambulance: {session.ambulance.numberPlate}</span>
-            <span>activeDriverId: {session.ambulance.activeDriverId}</span>
-            <Button type="primary" onClick={writeMockGps}>Write 10m GPS update</Button>
+            <strong>{user.displayName || user.email}</strong>
+            <span>Hospital: {user.hospitalName || 'Your Hospital'}</span>
+            <span>Ambulance: {ambulance.numberPlate}</span>
+            <span>GPS tracking is active</span>
           </div>
         )}
       </div>

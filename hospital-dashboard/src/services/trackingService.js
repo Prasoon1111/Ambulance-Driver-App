@@ -1,27 +1,12 @@
-import { writeDriverLocation } from './hospitalDataService';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase/config';
 
-let subscribers = [];
-
-export function subscribeToTracking(callback) {
-  // TODO: Replace with Firestore onSnapshot of driver GPS docs
-  subscribers.push(callback);
-  return () => {
-    subscribers = subscribers.filter((c) => c !== callback);
-  };
-}
-
-export function notifyTrackingUpdate(data) {
-  subscribers.forEach((cb) => cb(data));
-}
-
-// TODO: Integrate with GPS provider and call notifyTrackingUpdate on updates
-
-export function writeActiveDriverLocation({ driverUid, ambulanceId, latitude, longitude }) {
-  writeDriverLocation({
+export async function writeActiveDriverLocation({ driverUid, ambulanceId, latitude, longitude }) {
+  await updateDoc(doc(db, 'live_locations', ambulanceId), {
     driverUid,
     ambulanceId,
     lat: latitude,
     lng: longitude,
+    updatedAt: serverTimestamp(),
   });
-  notifyTrackingUpdate({ driverUid, ambulanceId, latitude, longitude });
 }

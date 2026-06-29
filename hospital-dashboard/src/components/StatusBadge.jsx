@@ -13,7 +13,8 @@ const statusLabels = {
 };
 
 function StatusBadge({ status = 'active', priority }) {
-  const tone = priority === 'critical' || status === 'critical' ? 'critical' : status;
+
+const tone = status === 'critical' ? 'critical' : status;
 
   return <span className={`status-badge ${tone}`}>{statusLabels[status] || status}</span>;
 }

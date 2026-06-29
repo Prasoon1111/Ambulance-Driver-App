@@ -1,3 +1,4 @@
+import { useContext } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Descriptions, Spin } from 'antd';
@@ -5,11 +6,12 @@ import { FiClock, FiMapPin } from 'react-icons/fi';
 import LiveMap from '../components/LiveMap';
 import StatusBadge from '../components/StatusBadge';
 import { useEmergency } from '../hooks/useEmergencies';
-import { getDriverById, getHospitalById } from '../services/hospitalDataService';
+import { AuthContext } from '../context/AuthContext';
 
 function EmergencyDetails() {
   const { id } = useParams();
   const { emergency, loading, error } = useEmergency(id);
+  const { user } = useContext(AuthContext);
 
   if (error) {
     return (
@@ -38,7 +40,9 @@ function EmergencyDetails() {
       <section className="page-stack">
         <div className="panel glass-card">
           <h2>Emergency Incident Not Found</h2>
-          <p className="body-muted">This emergency incident could not be found in the system.</p>
+          <p className="body-muted">
+            This emergency incident could not be found in the system.
+          </p>
           <Link className="details-link" to="/emergencies">
             Return to Emergency Operations
           </Link>
@@ -47,18 +51,18 @@ function EmergencyDetails() {
     );
   }
 
-  const assignedHospital = getHospitalById(emergency.hospitalId);
-  const emergencyDriver = getDriverById(emergency.driverId, emergency.hospitalId);
-  const driverAddress = [emergencyDriver?.city, emergencyDriver?.state].filter(Boolean).join(', ');
-
   return (
-    <motion.section className="page-stack" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+    <motion.section
+      className="page-stack"
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
       <div className="title-group">
         <p className="eyebrow">Emergency Incident - Live Monitoring</p>
         <h2>{emergency.id}</h2>
         <p>
-          Critical emergency response coordination and real-time monitoring for smart-city healthcare operations. All
-          data updates live.
+          Critical emergency response coordination and real-time monitoring for
+          smart-city healthcare operations. All data updates live.
         </p>
       </div>
 
@@ -73,25 +77,31 @@ function EmergencyDetails() {
           </div>
 
           <Descriptions column={1} bordered size="small" className="details-table">
-            <Descriptions.Item label="Response Unit">{emergency.ambulanceId}</Descriptions.Item>
-            <Descriptions.Item label="Emergency Operator">{emergency.driverName}</Descriptions.Item>
-            <Descriptions.Item label="Driver Address">{driverAddress}</Descriptions.Item>
-            <Descriptions.Item label="Destination Hospital">{emergency.hospitalId}</Descriptions.Item>
-            <Descriptions.Item label="Assigned Hospital Name">{assignedHospital?.name || 'Hospital'}</Descriptions.Item>
-            <Descriptions.Item label="Assigned Hospital Address">{assignedHospital?.address || 'Address not available'}</Descriptions.Item>
-            <Descriptions.Item label="Assigned Hospital Phone">{assignedHospital?.phone || 'Phone not available'}</Descriptions.Item>
+            <Descriptions.Item label="Response Unit">
+  {emergency.ambulanceId || 'Not assigned'}
+</Descriptions.Item>
+            <Descriptions.Item label="Emergency Operator">
+              {emergency.driverName}
+            </Descriptions.Item>
+            <Descriptions.Item label="Destination Hospital">
+              {emergency.hospitalId}
+            </Descriptions.Item>
             <Descriptions.Item label="Priority Level">
-              <span className={`priority-text ${emergency.priority}`}>{emergency.priority}</span>
+              <span className={`priority-text ${emergency.priority}`}>
+                {emergency.priority}
+              </span>
             </Descriptions.Item>
-            <Descriptions.Item
-              label={
-                <span className="details-label-icon">
-                  <FiClock size={16} /> Estimated Arrival
-                </span>
-              }
-            >
-              <span className="eta-value">{emergency.eta}</span>
-            </Descriptions.Item>
+            {emergency.status !== 'completed' && emergency.status !== 'resolved' && (
+  <Descriptions.Item
+    label={
+      <span className="details-label-icon">
+        <FiClock size={16} /> Estimated Arrival
+      </span>
+    }
+  >
+    <span className="eta-value">{emergency.eta}</span>
+  </Descriptions.Item>
+)}
             <Descriptions.Item
               label={
                 <span className="details-label-icon">
@@ -99,13 +109,20 @@ function EmergencyDetails() {
                 </span>
               }
             >
-              <span className="mono-value">
-                {emergency.location.latitude.toFixed(6)}, {emergency.location.longitude.toFixed(6)}
-              </span>
+              {emergency.location?.latitude && emergency.location?.longitude ? (
+                <span className="mono-value">
+                  {emergency.location.latitude.toFixed(6)},{' '}
+                  {emergency.location.longitude.toFixed(6)}
+                </span>
+              ) : (
+                <span className="body-muted">Location not available</span>
+              )}
             </Descriptions.Item>
             {emergency.timestamp && (
               <Descriptions.Item label="Last Updated">
-                <span className="body-muted">{new Date(emergency.timestamp).toLocaleTimeString()}</span>
+                <span className="body-muted">
+                  {new Date(emergency.timestamp).toLocaleTimeString()}
+                </span>
               </Descriptions.Item>
             )}
           </Descriptions>
@@ -121,7 +138,11 @@ function EmergencyDetails() {
             <h3>Live Ambulance Tracking</h3>
             <p>GPS coordinates update as ambulance moves</p>
           </div>
-          <LiveMap emergencies={[emergency]} selectedEmergencyId={emergency.id} showFleet={false} />
+          <LiveMap
+            emergencies={[emergency]}
+            selectedEmergencyId={emergency.id}
+            showFleet={false}
+          />
         </div>
       </section>
     </motion.section>
