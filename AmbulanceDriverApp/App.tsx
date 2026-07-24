@@ -16,6 +16,7 @@ import {
   SafeAreaView, ScrollView, StatusBar, Dimensions,
   KeyboardAvoidingView, Platform, ActivityIndicator,
   Animated, Easing, Alert, PermissionsAndroid, NativeModules,
+  Modal,
 } from 'react-native';
 import firestore, {
   FieldValue,
@@ -44,16 +45,43 @@ const { DriverLocationService } = NativeModules;
 
 // ─── Driver type ──────────────────────────────────────────────────────────────
 type Driver = {
-  'Name':          string;
-  'Email ID':      string;
-  'Phone Number':  string;
-  'Gender':        string;
-  'Hospital Name': string;
-  'Role':          string;
-  'City':          string;
-  'State':         string;
-  'Documents':     string;
-  docId?:          string;
+  'Name'?:          string;
+  'Email ID'?:      string;
+  'Phone Number'?:  string;
+  'Gender'?:        string;
+  'Hospital Name'?: string;
+  'Role'?:          string;
+  'City'?:          string;
+  'State'?:         string;
+  'licenseNumber'?: string;
+  'aadhaarNumber'?: string;
+  'hospitalId'?:    string;
+  'Documents'?:     string;
+  docId?:           string;
+  [key: string]:    any;
+};
+
+// ─── Emergency type ───────────────────────────────────────────────────────────
+type EmergencyLocation = {
+  latitude: number;
+  longitude: number;
+};
+
+type Emergency = {
+  id: string;
+  address?: string;
+  ambulanceId?: string;
+  driverId?: string;
+  driverName?: string;
+  eta?: string | null;
+  hospitalId?: string;
+  incidentType?: string;
+  location?: EmergencyLocation | { latitude: number; longitude: number } | any;
+  patientName?: string;
+  priority?: string;
+  startTime?: any;
+  status?: 'requested' | 'accepted' | 'rejected' | string;
+  [key: string]: any;
 };
 
 // ─── Availability values ──────────────────────────────────────────────────────
@@ -191,6 +219,20 @@ const distanceMeters = (a: Coordinate, b: Coordinate) => {
   return 2 * earthRadius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
 
+const calculateBearing = (from: Coordinate, to: Coordinate) => {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const toDeg = (value: number) => (value * 180) / Math.PI;
+  const fromLat = toRad(from.latitude);
+  const toLat = toRad(to.latitude);
+  const deltaLng = toRad(to.longitude - from.longitude);
+  const y = Math.sin(deltaLng) * Math.cos(toLat);
+  const x =
+    Math.cos(fromLat) * Math.sin(toLat) -
+    Math.sin(fromLat) * Math.cos(toLat) * Math.cos(deltaLng);
+
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+};
+
 // ─── Location permission ──────────────────────────────────────────────────────
 const requestLocationPermission = async (): Promise<boolean> => {
   if (Platform.OS === 'android') {
@@ -278,6 +320,13 @@ const Avatar = ({ name, size = 48 }: { name: string; size?: number }) => {
     </View>
   );
 };
+
+const NavigationArrow = ({ heading }: { heading: number }) => (
+  <Svg width={40} height={40} viewBox="0 0 40 40" style={{ transform: [{ rotate: `${heading}deg` }] }}>
+    <Circle cx="20" cy="20" r="16" fill="rgba(255, 59, 92, 0.2)" />
+    <Polygon points="20,8 32,32 20,26 8,32" fill="#FF3B5C" stroke="#FFFFFF" strokeWidth={2} />
+  </Svg>
+);
 
 type Screen = 'email' | 'otp' | 'home' | 'maps' | 'profile';
 
@@ -749,9 +798,9 @@ const HomeScreen = ({
 // SCREEN 4 — Maps
 // ═════════════════════════════════════════════════════════════════════════════
 const MapsScreen = ({
-  driver, onTripComplete, onProfile,
+  driver, activeEmergency, onTripComplete, onProfile,
 }: {
-  driver: Driver; onTripComplete: () => void; onProfile: () => void;
+  driver: Driver; activeEmergency?: Emergency | null; onTripComplete: () => void; onProfile: () => void;
 }) => {
   const [currentLocationText, setCurrentLocationText] = useState('');
   const [destinationText, setDestinationText] = useState('');
@@ -764,9 +813,21 @@ const MapsScreen = ({
   const [distance, setDistance] = useState('');
   const [routeLoading, setRouteLoading] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [directionsActive, setDirectionsActive] = useState(false);
   const [tripStatusIndex, setTripStatusIndex] = useState(0);
   const [tripStatusUpdating, setTripStatusUpdating] = useState(false);
   const [error, setError] = useState('');
+  
+  // Navigation State
+  const [isFollowing, setIsFollowing] = useState(true);
+  const [isVoiceMuted, setIsVoiceMuted] = useState(false);
+  const [heading, setHeading] = useState(0);
+  const lastRerouteRef = useRef<number>(0);
+  const lastRouteFetchLocationRef = useRef<Coordinate | null>(null);
+  const lastRouteFetchTimeRef = useRef<number>(0);
+  const lastAddressFetchLocationRef = useRef<Coordinate | null>(null);
+  const isFetchingRouteRef = useRef<boolean>(false);
+
   const watchId = useRef<number | null>(null);
   const mapRef = useRef<MapView | null>(null);
 
@@ -776,6 +837,26 @@ const MapsScreen = ({
     latitudeDelta: liveLocation ? 0.05 : 18,
     longitudeDelta: liveLocation ? 0.05 : 18,
   };
+
+  useEffect(() => {
+    if (!activeEmergency) return;
+
+    if (activeEmergency.address) {
+      setDestinationText(activeEmergency.address);
+    } else if (activeEmergency.patientName) {
+      setDestinationText(`Patient: ${activeEmergency.patientName}`);
+    }
+
+    if (activeEmergency.location) {
+      const loc = activeEmergency.location;
+      if (typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+        setDestinationCoordinate({
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+        });
+      }
+    }
+  }, [activeEmergency]);
 
   const updateDriverLocation = (coordinate: Coordinate) => {
     setLiveLocation(coordinate);
@@ -836,6 +917,9 @@ const MapsScreen = ({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
           };
+          if (position.coords.heading !== null && position.coords.heading >= 0) {
+            setHeading(position.coords.heading);
+          }
           updateDriverLocation(coordinate);
           updateCurrentAddress(coordinate);
         },
@@ -852,6 +936,9 @@ const MapsScreen = ({
             latitude: position.coords.latitude,
             longitude: position.coords.longitude,
           };
+          if (position.coords.heading !== null && position.coords.heading >= 0) {
+            setHeading(position.coords.heading);
+          }
           updateDriverLocation(coordinate);
         },
         e => console.error('Navigation watch error:', e),
@@ -875,14 +962,86 @@ const MapsScreen = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driver.docId]);
 
+  // 1. Live Address Update on GPS movement
+  useEffect(() => {
+    if (!liveLocation) return;
+
+    const shouldUpdateAddress =
+      !lastAddressFetchLocationRef.current ||
+      distanceMeters(liveLocation, lastAddressFetchLocationRef.current) > 20;
+
+    if (shouldUpdateAddress) {
+      lastAddressFetchLocationRef.current = liveLocation;
+      updateCurrentAddress(liveLocation);
+    }
+  }, [liveLocation]);
+
+  // 2. Continuous Route Recalculation & Off-Route Rerouting
+  useEffect(() => {
+    if (!liveLocation || (!destinationCoordinate && !destinationText.trim())) return;
+    if (routeCoordinates.length === 0 && !directionsActive) return;
+
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastRouteFetchTimeRef.current;
+
+    // Throttle route recalculation to at least 4 seconds apart unless off-route
+    if (timeSinceLastFetch < 4000 || isFetchingRouteRef.current) return;
+
+    const distanceMoved = lastRouteFetchLocationRef.current
+      ? distanceMeters(liveLocation, lastRouteFetchLocationRef.current)
+      : 999;
+
+    let minDistanceToPolyline = Infinity;
+    if (routeCoordinates.length > 0) {
+      for (const pt of routeCoordinates) {
+        const dist = distanceMeters(liveLocation, pt);
+        if (dist < minDistanceToPolyline) minDistanceToPolyline = dist;
+      }
+    }
+
+    const isOffRoute = minDistanceToPolyline > 40; // 40 meters off route
+    const isSignificantMove = distanceMoved >= 15; // 15 meters moved
+
+    if (isOffRoute || isSignificantMove) {
+      fetchRoute(true);
+    }
+  }, [liveLocation, directionsActive, routeCoordinates, destinationCoordinate, destinationText]);
+
+  // 3. Step progression along current step
   useEffect(() => {
     if (!liveLocation || routeSteps.length === 0) return;
 
-    const nextIndex = routeSteps.findIndex(
-      step => distanceMeters(liveLocation, step.endLocation) > 45,
-    );
-    if (nextIndex >= 0) setActiveStepIndex(nextIndex);
-  }, [liveLocation, routeSteps]);
+    const currentStep = routeSteps[activeStepIndex];
+    if (currentStep) {
+      const distToCurrentEnd = distanceMeters(liveLocation, currentStep.endLocation);
+      if (distToCurrentEnd < 25 && activeStepIndex < routeSteps.length - 1) {
+        setActiveStepIndex(prev => prev + 1);
+      }
+    }
+  }, [liveLocation, routeSteps, activeStepIndex]);
+
+  useEffect(() => {
+    if (!directionsActive || !liveLocation) return;
+
+    if (isFollowing) {
+      const nextStep = routeSteps[activeStepIndex];
+      let camHeading = heading;
+      // Fallback to route bearing if device heading is 0 or unavailable
+      if (camHeading === 0 && nextStep) {
+        camHeading = calculateBearing(liveLocation, nextStep.endLocation);
+      }
+
+      mapRef.current?.animateCamera(
+        {
+          center: liveLocation,
+          pitch: 60,
+          heading: camHeading,
+          zoom: 18.5,
+        },
+        { duration: 1000 },
+      );
+    }
+  }, [activeStepIndex, directionsActive, liveLocation, routeSteps, isFollowing, heading]);
 
   const useCurrentGps = async () => {
     setLocating(true);
@@ -925,27 +1084,34 @@ const MapsScreen = ({
     return '';
   };
 
-  const fetchRoute = async () => {
-    const origin = buildOrigin();
+  const fetchRoute = async (isAutoUpdate = false) => {
+    if (isFetchingRouteRef.current) return;
+
+    const origin = liveLocation
+      ? `${liveLocation.latitude},${liveLocation.longitude}`
+      : buildOrigin();
+
     const destination = destinationCoordinate
       ? `${destinationCoordinate.latitude},${destinationCoordinate.longitude}`
       : destinationText.trim();
 
     if (!GOOGLE_MAPS_API_KEY) {
-      setError('Add your Google Maps API key in App.tsx before requesting routes.');
+      if (!isAutoUpdate) setError('Add your Google Maps API key in App.tsx before requesting routes.');
       return;
     }
     if (!origin) {
-      setError('Enter a current location or use GPS.');
+      if (!isAutoUpdate) setError('Enter a current location or use GPS.');
       return;
     }
     if (!destination) {
-      setError('Enter the patient destination.');
+      if (!isAutoUpdate) setError('Enter the patient destination.');
       return;
     }
 
+    isFetchingRouteRef.current = true;
     setRouteLoading(true);
-    setError('');
+    if (!isAutoUpdate) setError('');
+
     try {
       const params = [
         `origin=${encodeURIComponent(origin)}`,
@@ -962,7 +1128,7 @@ const MapsScreen = ({
       const json = await response.json();
 
       if (json.status !== 'OK' || !json.routes?.length) {
-        setError(json.error_message || `Route not found: ${json.status}`);
+        if (!isAutoUpdate) setError(json.error_message || `Route not found: ${json.status}`);
         return;
       }
 
@@ -982,14 +1148,33 @@ const MapsScreen = ({
       setRouteCoordinates(decoded);
       setRouteSteps(steps);
       setActiveStepIndex(0);
-      setEta(leg.duration_in_traffic?.text || leg.duration.text);
+
+      if (liveLocation) {
+        lastRouteFetchLocationRef.current = liveLocation;
+      }
+      lastRouteFetchTimeRef.current = Date.now();
+
+      if (!isAutoUpdate && !directionsActive) {
+        setDirectionsActive(false);
+      }
+
+      const calculatedEta = leg.duration_in_traffic?.text || leg.duration.text;
+      setEta(calculatedEta);
       setDistance(leg.distance.text);
       setDestinationCoordinate({
         latitude: leg.end_location.lat,
         longitude: leg.end_location.lng,
       });
 
-      if (decoded.length > 0) {
+      if (activeEmergency?.id) {
+        firestore()
+          .collection('emergencies')
+          .doc(activeEmergency.id)
+          .update({ eta: calculatedEta })
+          .catch(e => console.error('Failed to update emergency ETA:', e));
+      }
+
+      if (decoded.length > 0 && !directionsActive && !isAutoUpdate) {
         mapRef.current?.fitToCoordinates(decoded, {
           edgePadding: { top: 90, right: 45, bottom: 260, left: 45 },
           animated: true,
@@ -997,15 +1182,49 @@ const MapsScreen = ({
       }
     } catch (e: any) {
       console.error('Directions error:', e.message);
-      setError('Could not load the route. Check your network and API key.');
+      if (!isAutoUpdate) setError('Could not load the route. Check your network and API key.');
     } finally {
       setRouteLoading(false);
+      isFetchingRouteRef.current = false;
     }
   };
 
   const activeStep = routeSteps[activeStepIndex];
   const currentTripStatus = TRIP_STATUS_STEPS[tripStatusIndex];
   const isTripCompleted = currentTripStatus.value === 'trip_completed';
+
+  const startDirections = () => {
+    if (!liveLocation) {
+      setError('Current GPS location is required to start directions.');
+      return;
+    }
+    if (routeCoordinates.length === 0 || routeSteps.length === 0) {
+      setError('Show a route before starting directions.');
+      return;
+    }
+
+    if (directionsActive) {
+      setDirectionsActive(false);
+      setIsFollowing(false);
+      return;
+    }
+
+    setError('');
+    setDirectionsActive(true);
+    setIsFollowing(true);
+
+    fetchRoute(true);
+
+    mapRef.current?.animateCamera(
+      {
+        center: liveLocation,
+        pitch: 55,
+        heading: activeStep ? calculateBearing(liveLocation, activeStep.endLocation) : 0,
+        zoom: 17,
+      },
+      { duration: 650 },
+    );
+  };
 
   const advanceTripStatus = async () => {
     if (!driver.docId || tripStatusUpdating || isTripCompleted) return;
@@ -1062,12 +1281,20 @@ const MapsScreen = ({
         style={styles.map}
         initialRegion={initialRegion}
         region={liveLocation && routeCoordinates.length === 0 ? initialRegion : undefined}
-        showsUserLocation
-        showsMyLocationButton
-        followsUserLocation
+        showsUserLocation={!directionsActive}
+        showsMyLocationButton={false}
+        followsUserLocation={false}
+        onPanDrag={() => {
+          if (directionsActive && isFollowing) setIsFollowing(false);
+        }}
       >
-        {liveLocation && (
+        {liveLocation && !directionsActive && (
           <Marker coordinate={liveLocation} title="Driver location" />
+        )}
+        {liveLocation && directionsActive && (
+          <Marker coordinate={liveLocation} anchor={{ x: 0.5, y: 0.5 }}>
+            <NavigationArrow heading={heading || (activeStep ? calculateBearing(liveLocation, activeStep.endLocation) : 0)} />
+          </Marker>
         )}
         {destinationCoordinate && (
           <Marker coordinate={destinationCoordinate} title="Patient destination" pinColor="#FF3B5C" />
@@ -1075,200 +1302,218 @@ const MapsScreen = ({
         {routeCoordinates.length > 0 && (
           <Polyline
             coordinates={routeCoordinates}
-            strokeColor="#FF3B5C"
-            strokeWidth={5}
+            strokeColor={directionsActive ? "#3B82F6" : "#FF3B5C"}
+            strokeWidth={directionsActive ? 8 : 5}
           />
         )}
       </MapView>
 
       <View style={styles.routePanel}>
-        <View style={styles.routeInputsRow}>
-          <View style={styles.routeInputs}>
-            <TextInput
-              style={[styles.routeInput, styles.routeInputReadonly]}
-              placeholder="Your Location"
-              placeholderTextColor="#AAAAAA"
-              value={currentLocationText}
-              editable={false}
-            />
-            <GooglePlacesAutocomplete
-              placeholder="Patient Address"
-              fetchDetails
-              minLength={2}
-              debounce={300}
-              nearbyPlacesAPI="GooglePlacesSearch"
-              enablePoweredByContainer={false}
-              onPress={(data, details = null) => {
-                setDestinationText(data.description);
-                if (details?.geometry?.location) {
-                  setDestinationCoordinate({
-                    latitude: details.geometry.location.lat,
-                    longitude: details.geometry.location.lng,
-                  });
-                }
-              }}
-              onFail={e => {
-                console.error('Places autocomplete error:', e);
-                const message =
-                  typeof e === 'string'
-                    ? e
-                    : e?.message || e?.error_message || 'Check Places API access for this key.';
-                setError(`Address suggestions failed: ${message}`);
-              }}
-              onNotFound={() => {
-                setError('No matching patient address found.');
-              }}
-              query={{
-                key: GOOGLE_MAPS_API_KEY,
-                language: 'en',
-                components: 'country:in',
-              }}
-              textInputProps={{
-                value: destinationText,
-                onChangeText: text => {
-                  setError('');
-                  setDestinationText(text);
-                  setDestinationCoordinate(null);
-                },
-                placeholderTextColor: '#AAAAAA',
-                autoCapitalize: 'words',
-              }}
-              styles={{
-                container: styles.placesContainer,
-                textInput: styles.routeInput,
-                listView: styles.placesList,
-                row: styles.placesRow,
-                description: styles.placesDescription,
-                separator: styles.placesSeparator,
-              }}
-            />
-          </View>
-          <TouchableOpacity
-            style={styles.gpsButton}
-            onPress={useCurrentGps}
-            disabled={locating}
-            activeOpacity={0.8}
-          >
-            {locating
-              ? <ActivityIndicator color="#FF3B5C" />
-              : <Text style={styles.gpsButtonText}>⌖</Text>}
-          </TouchableOpacity>
-        </View>
-
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-        <View style={styles.tripStatusCard}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.tripStepper}
-          >
-            {TRIP_STATUS_STEPS.map((step, index) => {
-              const isActive = index === tripStatusIndex;
-              const isDone = index < tripStatusIndex;
-
-              return (
-                <View key={step.value} style={styles.tripStep}>
-                  <View style={[
-                    styles.tripStepDot,
-                    isActive && styles.tripStepDotActive,
-                    isDone && styles.tripStepDotDone,
-                  ]}>
-                    <Text style={[
-                      styles.tripStepDotText,
-                      (isActive || isDone) && styles.tripStepDotTextActive,
-                    ]}>
-                      {isDone ? '✓' : index + 1}
-                    </Text>
-                  </View>
-                  <Text style={[
-                    styles.tripStepLabel,
-                    isActive && styles.tripStepLabelActive,
-                  ]}>
-                    {step.label}
-                  </Text>
-                </View>
-              );
-            })}
-          </ScrollView>
-
-          <View style={styles.tripStatusActionRow}>
-            <View style={styles.tripStatusTextBlock}>
-              <Text style={styles.tripStatusLabel}>Trip status</Text>
-              <Text style={styles.tripStatusValue}>{currentTripStatus.label}</Text>
+          <View style={styles.routeInputsRow}>
+            <View style={styles.routeInputs}>
+              <TextInput
+                style={[styles.routeInput, styles.routeInputReadonly]}
+                placeholder="Your Location"
+                placeholderTextColor="#AAAAAA"
+                value={currentLocationText}
+                editable={false}
+              />
+              <GooglePlacesAutocomplete
+                placeholder="Patient Address"
+                fetchDetails
+                minLength={2}
+                debounce={300}
+                nearbyPlacesAPI="GooglePlacesSearch"
+                enablePoweredByContainer={false}
+                onPress={(data, details = null) => {
+                  setDestinationText(data.description);
+                  if (details?.geometry?.location) {
+                    setDestinationCoordinate({
+                      latitude: details.geometry.location.lat,
+                      longitude: details.geometry.location.lng,
+                    });
+                  }
+                }}
+                onFail={e => {
+                  console.error('Places autocomplete error:', e);
+                  const message =
+                    typeof e === 'string'
+                      ? e
+                      : e?.message || e?.error_message || 'Check Places API access for this key.';
+                  setError(`Address suggestions failed: ${message}`);
+                }}
+                onNotFound={() => {
+                  setError('No matching patient address found.');
+                }}
+                query={{
+                  key: GOOGLE_MAPS_API_KEY,
+                  language: 'en',
+                  components: 'country:in',
+                }}
+                textInputProps={{
+                  value: destinationText,
+                  onChangeText: text => {
+                    setError('');
+                    setDestinationText(text);
+                    setDestinationCoordinate(null);
+                  },
+                  placeholderTextColor: '#AAAAAA',
+                  autoCapitalize: 'words',
+                }}
+                styles={{
+                  container: styles.placesContainer,
+                  textInput: styles.routeInput,
+                  listView: styles.placesList,
+                  row: styles.placesRow,
+                  description: styles.placesDescription,
+                  separator: styles.placesSeparator,
+                }}
+              />
             </View>
             <TouchableOpacity
-              style={[
-                styles.tripStatusButton,
-                (tripStatusUpdating || isTripCompleted) && styles.disabledButton,
-              ]}
-              onPress={advanceTripStatus}
-              disabled={tripStatusUpdating || isTripCompleted}
-              activeOpacity={0.85}
+              style={styles.gpsButton}
+              onPress={useCurrentGps}
+              disabled={locating}
+              activeOpacity={0.8}
             >
-              {tripStatusUpdating
-                ? <ActivityIndicator color="#FFF" />
-                : <Text style={styles.tripStatusButtonText}>{currentTripStatus.action}</Text>}
+              {locating
+                ? <ActivityIndicator color="#FF3B5C" />
+                : <Text style={styles.gpsButtonText}>⌖</Text>}
             </TouchableOpacity>
           </View>
-        </View>
 
-        <TouchableOpacity
-          style={[styles.primaryButton, routeLoading && styles.disabledButton]}
-          onPress={fetchRoute}
-          disabled={routeLoading}
-          activeOpacity={0.85}
-        >
-          {routeLoading
-            ? <ActivityIndicator color="#FFF" />
-            : <Text style={styles.primaryButtonText}>Show Shortest Route</Text>}
-        </TouchableOpacity>
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        {(eta || distance) && (
-          <View style={styles.routeSummary}>
-            <View>
-              <Text style={styles.routeSummaryLabel}>ETA</Text>
-              <Text style={styles.routeSummaryValue}>{eta || '—'}</Text>
-            </View>
-            <View>
-              <Text style={styles.routeSummaryLabel}>Distance</Text>
-              <Text style={styles.routeSummaryValue}>{distance || '—'}</Text>
-            </View>
-            <View>
-              <Text style={styles.routeSummaryLabel}>Updates</Text>
-              <Text style={styles.routeSummaryValue}>{liveLocation ? 'Live' : 'Waiting'}</Text>
-            </View>
-          </View>
-        )}
+          <View style={styles.tripStatusCard}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tripStepper}
+            >
+              {TRIP_STATUS_STEPS.map((step, index) => {
+                const isActive = index === tripStatusIndex;
+                const isDone = index < tripStatusIndex;
 
-        {activeStep && (
-          <View style={styles.turnCard}>
-            <Text style={styles.turnLabel}>Next turn</Text>
-            <Text style={styles.turnInstruction}>{activeStep.instruction}</Text>
-            <Text style={styles.turnMeta}>
-              {activeStep.distance} • {activeStep.duration}
-            </Text>
-          </View>
-        )}
+                return (
+                  <View key={step.value} style={styles.tripStep}>
+                    <View style={[
+                      styles.tripStepDot,
+                      isActive && styles.tripStepDotActive,
+                      isDone && styles.tripStepDotDone,
+                    ]}>
+                      <Text style={[
+                        styles.tripStepDotText,
+                        (isActive || isDone) && styles.tripStepDotTextActive,
+                      ]}>
+                        {isDone ? '✓' : index + 1}
+                      </Text>
+                    </View>
+                    <Text style={[
+                      styles.tripStepLabel,
+                      isActive && styles.tripStepLabelActive,
+                    ]}>
+                      {step.label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
 
-        {routeSteps.length > 0 && (
-          <ScrollView
-            style={styles.stepsList}
-            nestedScrollEnabled
-            showsVerticalScrollIndicator={false}
-          >
-            {routeSteps.slice(activeStepIndex, activeStepIndex + 4).map((step, index) => (
-              <View key={`${step.instruction}-${index}`} style={styles.stepRow}>
-                <Text style={styles.stepNumber}>{activeStepIndex + index + 1}</Text>
-                <View style={styles.stepTextBlock}>
-                  <Text style={styles.stepInstruction}>{step.instruction}</Text>
-                  <Text style={styles.stepMeta}>{step.distance} • {step.duration}</Text>
-                </View>
+            <View style={styles.tripStatusActionRow}>
+              <View style={styles.tripStatusTextBlock}>
+                <Text style={styles.tripStatusLabel}>Trip status</Text>
+                <Text style={styles.tripStatusValue}>{currentTripStatus.label}</Text>
               </View>
-            ))}
-          </ScrollView>
-        )}
-      </View>
+              <TouchableOpacity
+                style={[
+                  styles.tripStatusButton,
+                  (tripStatusUpdating || isTripCompleted) && styles.disabledButton,
+                ]}
+                onPress={advanceTripStatus}
+                disabled={tripStatusUpdating || isTripCompleted}
+                activeOpacity={0.85}
+              >
+                {tripStatusUpdating
+                  ? <ActivityIndicator color="#FFF" />
+                  : <Text style={styles.tripStatusButtonText}>{currentTripStatus.action}</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.primaryButton, routeLoading && styles.disabledButton]}
+            onPress={fetchRoute}
+            disabled={routeLoading}
+            activeOpacity={0.85}
+          >
+            {routeLoading
+              ? <ActivityIndicator color="#FFF" />
+              : <Text style={styles.primaryButtonText}>Show Shortest Route</Text>}
+          </TouchableOpacity>
+
+          {(eta || distance) && (
+            <View style={styles.routeSummary}>
+              <View>
+                <Text style={styles.routeSummaryLabel}>ETA</Text>
+                <Text style={styles.routeSummaryValue}>{eta || '—'}</Text>
+              </View>
+              <View>
+                <Text style={styles.routeSummaryLabel}>Distance</Text>
+                <Text style={styles.routeSummaryValue}>{distance || '—'}</Text>
+              </View>
+              <View>
+                <Text style={styles.routeSummaryLabel}>Updates</Text>
+                <Text style={styles.routeSummaryValue}>{liveLocation ? 'Live' : 'Waiting'}</Text>
+              </View>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.directionsButton,
+              directionsActive && styles.directionsButtonActive,
+              routeSteps.length === 0 && styles.disabledButton,
+            ]}
+            onPress={startDirections}
+            disabled={routeSteps.length === 0}
+            activeOpacity={0.85}
+          >
+            <View style={styles.directionsIcon}>
+              <Text style={styles.directionsIconText}>↱</Text>
+            </View>
+            <View style={styles.directionsTextBlock}>
+              <Text style={styles.directionsTitle}>
+                {directionsActive ? 'Navigating' : 'Directions'}
+              </Text>
+              <Text style={styles.directionsSubtitle} numberOfLines={2}>
+                {directionsActive && activeStep
+                  ? `${activeStep.instruction} • ${activeStep.distance}`
+                  : routeSteps.length > 0
+                    ? 'Start turn-by-turn navigation'
+                    : 'Show a route to enable directions'}
+              </Text>
+            </View>
+            <Text style={styles.directionsChevron}>›</Text>
+          </TouchableOpacity>
+
+          {routeSteps.length > 0 && (
+            <ScrollView
+              style={styles.stepsList}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+            >
+              {routeSteps.slice(activeStepIndex, activeStepIndex + 4).map((step, index) => (
+                <View key={`${step.instruction}-${index}`} style={styles.stepRow}>
+                  <Text style={styles.stepNumber}>{activeStepIndex + index + 1}</Text>
+                  <View style={styles.stepTextBlock}>
+                    <Text style={styles.stepInstruction}>{step.instruction}</Text>
+                    <Text style={styles.stepMeta}>{step.distance} • {step.duration}</Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </View>
     </SafeAreaView>
   );
 };
@@ -1281,17 +1526,88 @@ const ProfileScreen = ({
 }: {
   driver: Driver; onBack: () => void; onLogout: () => void;
 }) => {
+  const [profileData, setProfileData] = useState<Driver | null>(driver);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    let unsubscribe: () => void = () => {};
+
+    const fetchDriverProfile = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        let docRef;
+
+        if (driver?.docId) {
+          docRef = firestore().collection('drivers').doc(driver.docId);
+        } else if (driver?.['Email ID']) {
+          const snap = await firestore()
+            .collection('drivers')
+            .where('Email ID', '==', driver['Email ID'])
+            .limit(1)
+            .get();
+
+          if (!snap.empty) {
+            docRef = snap.docs[0].ref;
+          }
+        }
+
+        if (docRef) {
+          unsubscribe = docRef.onSnapshot(
+            snapshot => {
+              if (snapshot.exists) {
+                const data = snapshot.data();
+                setProfileData({ ...data, docId: snapshot.id } as Driver);
+              } else {
+                setError('Driver profile not found in database.');
+              }
+              setLoading(false);
+            },
+            err => {
+              console.error('Profile snapshot error:', err);
+              setError('Failed to load profile details.');
+              setLoading(false);
+            },
+          );
+        } else {
+          setProfileData(driver);
+          setLoading(false);
+        }
+      } catch (err: any) {
+        console.error('Fetch profile error:', err);
+        setError('Error connecting to database.');
+        setLoading(false);
+      }
+    };
+
+    fetchDriverProfile();
+
+    return () => {
+      unsubscribe();
+    };
+  }, [driver]);
+
   const fields: { label: string; key: keyof Driver; icon: string }[] = [
-    { label: 'Full Name',    key: 'Name',          icon: '👤' },
-    { label: 'Email',        key: 'Email ID',       icon: '✉️' },
-    { label: 'Phone Number', key: 'Phone Number',   icon: '📞' },
-    { label: 'Gender',       key: 'Gender',         icon: '⚧'  },
-    { label: 'Role',         key: 'Role',           icon: '🪪'  },
-    { label: 'Hospital',     key: 'Hospital Name',  icon: '🏥' },
-    { label: 'City',         key: 'City',           icon: '🏙️' },
-    { label: 'State',        key: 'State',          icon: '📍' },
-    { label: 'Documents',    key: 'Documents',      icon: '📄' },
+    { label: 'Name',           key: 'Name',          icon: '👤' },
+    { label: 'Role',           key: 'Role',          icon: '🪪' },
+    { label: 'Email',          key: 'Email ID',      icon: '✉️' },
+    { label: 'Phone Number',   key: 'Phone Number',  icon: '📞' },
+    { label: 'Gender',         key: 'Gender',        icon: '⚧'  },
+    { label: 'City',           key: 'City',          icon: '🏙️' },
+    { label: 'State',          key: 'State',         icon: '📍' },
+    { label: 'Hospital Name',  key: 'Hospital Name', icon: '🏥' },
+    { label: 'License Number', key: 'licenseNumber', icon: '📄' },
+    { label: 'Aadhaar Number', key: 'aadhaarNumber', icon: '🆔' },
+    { label: 'Hospital ID',    key: 'hospitalId',    icon: '🏢' },
   ];
+
+  const getFieldValue = (val: any): string => {
+    if (val === undefined || val === null) return 'Not available';
+    const str = String(val).trim();
+    return str.length > 0 ? str : 'Not available';
+  };
 
   const handleSignOut = () => {
     Alert.alert(
@@ -1303,6 +1619,10 @@ const ProfileScreen = ({
       ],
     );
   };
+
+  const currentProfile = profileData || driver;
+  const driverName = currentProfile['Name'] || '';
+  const driverRole = currentProfile['Role'] || '';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1321,52 +1641,168 @@ const ProfileScreen = ({
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Avatar block */}
-        <View style={styles.profileTop}>
-          <Avatar name={driver['Name']} size={80} />
-          <Text style={styles.profileName}>{driver['Name']}</Text>
-          <Text style={styles.profileRole}>{driver['Role']}</Text>
-          <View style={styles.verifiedBadge}>
-            <Text style={styles.verifiedText}>
-              ✓  Documents {driver['Documents']}
-            </Text>
-          </View>
+      {loading && !profileData ? (
+        <View style={styles.profileLoadingContainer}>
+          <ActivityIndicator size="large" color="#FF3B5C" />
+          <Text style={styles.profileLoadingText}>Loading profile details...</Text>
         </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false}>
+          {error ? (
+            <View style={styles.profileErrorBanner}>
+              <Text style={styles.profileErrorBannerText}>{error}</Text>
+            </View>
+          ) : null}
 
-        {/* Info card */}
-        <View style={styles.profileCard}>
-          {fields.map((f, i) => (
-            <View
-              key={f.key}
-              style={[
-                styles.profileRow,
-                i < fields.length - 1 && styles.profileRowBorder,
-              ]}
-            >
-              <Text style={styles.profileRowIcon}>{f.icon}</Text>
-              <View style={styles.profileRowText}>
-                <Text style={styles.profileRowLabel}>{f.label}</Text>
-                <Text style={styles.profileRowValue}>
-                  {driver[f.key] || '—'}
+          {/* Avatar block */}
+          <View style={styles.profileTop}>
+            <Avatar name={driverName || 'Driver'} size={80} />
+            <Text style={styles.profileName}>{getFieldValue(driverName)}</Text>
+            <Text style={styles.profileRole}>{getFieldValue(driverRole)}</Text>
+            <View style={styles.verifiedBadge}>
+              <Text style={styles.verifiedText}>
+                ✓ Verified Driver
+              </Text>
+            </View>
+          </View>
+
+          {/* Info card */}
+          <View style={styles.profileCard}>
+            {fields.map((f, i) => (
+              <View
+                key={f.key}
+                style={[
+                  styles.profileRow,
+                  i < fields.length - 1 && styles.profileRowBorder,
+                ]}
+              >
+                <Text style={styles.profileRowIcon}>{f.icon}</Text>
+                <View style={styles.profileRowText}>
+                  <Text style={styles.profileRowLabel}>{f.label}</Text>
+                  <Text style={styles.profileRowValue}>
+                    {getFieldValue(currentProfile[f.key])}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* Sign Out */}
+          <TouchableOpacity
+            style={styles.signOutButton}
+            onPress={handleSignOut}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.signOutText}>⏻  Sign Out</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 32 }} />
+        </ScrollView>
+      )}
+    </SafeAreaView>
+  );
+};
+
+// ═════════════════════════════════════════════════════════════════════════════
+// EMERGENCY REQUEST MODAL
+// ═════════════════════════════════════════════════════════════════════════════
+const EmergencyRequestModal = ({
+  emergency,
+  visible,
+  onAccept,
+  onReject,
+  processing,
+}: {
+  emergency: Emergency | null;
+  visible: boolean;
+  onAccept: (emerg: Emergency) => void;
+  onReject: (emerg: Emergency) => void;
+  processing: boolean;
+}) => {
+  if (!emergency || !visible) return null;
+
+  const priorityLower = (emergency.priority || 'medium').toLowerCase();
+  let priorityStyle = styles.priorityMedium;
+  if (priorityLower.includes('critical')) priorityStyle = styles.priorityCritical;
+  else if (priorityLower.includes('high')) priorityStyle = styles.priorityHigh;
+  else if (priorityLower.includes('low')) priorityStyle = styles.priorityLow;
+
+  return (
+    <Modal
+      transparent
+      animationType="fade"
+      visible={visible}
+      onRequestClose={() => {}}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalHeaderBadge}>🚨 EMERGENCY DISPATCH REQUEST</Text>
+            <View style={[styles.priorityBadge, priorityStyle]}>
+              <Text style={styles.priorityBadgeText}>
+                {(emergency.priority || 'NORMAL').toUpperCase()}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.modalBody}>
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailIcon}>👤</Text>
+              <View style={styles.modalDetailText}>
+                <Text style={styles.modalDetailLabel}>PATIENT NAME</Text>
+                <Text style={styles.modalDetailValue}>
+                  {emergency.patientName || 'Not specified'}
                 </Text>
               </View>
             </View>
-          ))}
+
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailIcon}>📋</Text>
+              <View style={styles.modalDetailText}>
+                <Text style={styles.modalDetailLabel}>INCIDENT TYPE</Text>
+                <Text style={styles.modalDetailValue}>
+                  {emergency.incidentType || 'General Emergency'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalDetailRow}>
+              <Text style={styles.modalDetailIcon}>📍</Text>
+              <View style={styles.modalDetailText}>
+                <Text style={styles.modalDetailLabel}>PICKUP ADDRESS</Text>
+                <Text style={styles.modalDetailValue} numberOfLines={3}>
+                  {emergency.address || 'Address unavailable'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.modalActionRow}>
+            <TouchableOpacity
+              style={[styles.modalRejectButton, processing && styles.disabledButton]}
+              onPress={() => onReject(emergency)}
+              disabled={processing}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.modalRejectButtonText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalAcceptButton, processing && styles.disabledButton]}
+              onPress={() => onAccept(emergency)}
+              disabled={processing}
+              activeOpacity={0.8}
+            >
+              {processing ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <Text style={styles.modalAcceptButtonText}>Accept & Navigate</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
-
-        {/* Sign Out */}
-        <TouchableOpacity
-          style={styles.signOutButton}
-          onPress={handleSignOut}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.signOutText}>⏻  Sign Out</Text>
-        </TouchableOpacity>
-
-        <View style={{ height: 32 }} />
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </Modal>
   );
 };
 
@@ -1383,6 +1819,122 @@ export default function App() {
   const [homeAvailability, setHomeAvailability] =
     useState<AvailabilityStatus>('available');
   const [markHomeAvailable, setMarkHomeAvailable] = useState(true);
+
+  // Emergency request states
+  const [incomingEmergency, setIncomingEmergency] = useState<Emergency | null>(null);
+  const [activeEmergency, setActiveEmergency] = useState<Emergency | null>(null);
+  const [processingAction, setProcessingAction] = useState<boolean>(false);
+  const handledEmergencyIds = useRef<Set<string>>(new Set());
+
+  // Listen for emergency requests assigned specifically to this driver
+  useEffect(() => {
+    if (!driver) return;
+
+    const unsubscribe = firestore()
+      .collection('emergencies')
+      .where('status', '==', 'requested')
+      .onSnapshot(
+        snapshot => {
+          if (!snapshot || snapshot.empty) {
+            setIncomingEmergency(null);
+            return;
+          }
+
+          const candidate = snapshot.docs
+            .map(d => ({ id: d.id, ...d.data() } as Emergency))
+            .find(emerg => {
+              if (handledEmergencyIds.current.has(emerg.id)) return false;
+
+              // Check if driver is active/available (must not be logged out or inactive)
+              const isDriverActive =
+                homeAvailability === 'available' || homeAvailability === 'busy';
+              if (!isDriverActive) return false;
+
+              // Match driver identity (driverName or driverId)
+              const driverNameMatch =
+                emerg.driverName &&
+                driver['Name'] &&
+                emerg.driverName.trim().toLowerCase() === driver['Name'].trim().toLowerCase();
+
+              const driverIdMatch =
+                (emerg.driverId && driver.docId && emerg.driverId === driver.docId) ||
+                (emerg.driverId && driver.uid && emerg.driverId === driver.uid);
+
+              const isDriverMatch = driverNameMatch || driverIdMatch;
+
+              // Match hospital identity (hospitalId or Hospital Name)
+              const hospitalIdMatch =
+                (emerg.hospitalId && driver.hospitalId && emerg.hospitalId === driver.hospitalId) ||
+                (emerg.hospitalId && driver['Hospital Name'] && emerg.hospitalId.trim().toLowerCase() === driver['Hospital Name'].trim().toLowerCase());
+
+              const isHospitalMatch = !emerg.hospitalId || hospitalIdMatch;
+
+              return isDriverMatch && isHospitalMatch;
+            });
+
+          if (candidate) {
+            setIncomingEmergency(candidate);
+          } else {
+            setIncomingEmergency(null);
+          }
+        },
+        err => {
+          console.error('Emergency request listener error:', err);
+        },
+      );
+
+    return () => unsubscribe();
+  }, [driver, homeAvailability]);
+
+  const handleAcceptEmergency = async (emerg: Emergency) => {
+    if (processingAction) return;
+    setProcessingAction(true);
+    try {
+      handledEmergencyIds.current.add(emerg.id);
+
+      await firestore()
+        .collection('emergencies')
+        .doc(emerg.id)
+        .update({
+          status: 'accepted',
+          acceptedAt: serverTimestamp(),
+        });
+
+      setActiveEmergency(emerg);
+      setIncomingEmergency(null);
+      setHomeAvailability('busy');
+      setMarkHomeAvailable(false);
+      setScreen('maps');
+    } catch (err: any) {
+      console.error('Accept emergency error:', err);
+      Alert.alert('Error', 'Could not accept emergency request.');
+    } finally {
+      setProcessingAction(false);
+    }
+  };
+
+  const handleRejectEmergency = async (emerg: Emergency) => {
+    if (processingAction) return;
+    setProcessingAction(true);
+    try {
+      handledEmergencyIds.current.add(emerg.id);
+
+      await firestore()
+        .collection('emergencies')
+        .doc(emerg.id)
+        .update({
+          status: 'rejected',
+          rejectedAt: serverTimestamp(),
+        });
+
+      setIncomingEmergency(null);
+    } catch (err: any) {
+      console.error('Reject emergency error:', err);
+      Alert.alert('Error', 'Could not reject emergency request.');
+    } finally {
+      setProcessingAction(false);
+    }
+  };
 
   // Restore session on app start
   useEffect(() => {
@@ -1451,21 +2003,23 @@ export default function App() {
     );
   }
 
+  let activeScreenContent = null;
+
   if (screen === 'profile' && driver) {
-    return (
+    activeScreenContent = (
       <ProfileScreen
         driver={driver}
         onBack={() => setScreen('home')}
         onLogout={handleLogout}
       />
     );
-  }
-
-  if (screen === 'maps' && driver) {
-    return (
+  } else if (screen === 'maps' && driver) {
+    activeScreenContent = (
       <MapsScreen
         driver={driver}
+        activeEmergency={activeEmergency}
         onTripComplete={() => {
+          setActiveEmergency(null);
           setHomeAvailability('busy');
           setMarkHomeAvailable(false);
           setScreen('home');
@@ -1473,10 +2027,8 @@ export default function App() {
         onProfile={() => setScreen('profile')}
       />
     );
-  }
-
-  if (screen === 'home' && driver) {
-    return (
+  } else if (screen === 'home' && driver) {
+    activeScreenContent = (
       <HomeScreen
         driver={driver}
         initialAvailability={homeAvailability}
@@ -1486,16 +2038,13 @@ export default function App() {
         onOpenMaps={() => setScreen('maps')}
       />
     );
-  }
-
-  if (screen === 'otp') {
-    return (
+  } else if (screen === 'otp') {
+    activeScreenContent = (
       <OtpScreen
         email={email}
         expectedOtp={otp}
         otpExpiry={expiry}
         onVerified={() => {
-          // Persist session only AFTER successful OTP verification
           if (driver) {
             AsyncStorage.setItem('driverSession', JSON.stringify(driver)).catch(
               e => console.error('Session save error:', e),
@@ -1506,18 +2055,31 @@ export default function App() {
         onBack={() => { setOtp(''); setDriver(null); setScreen('email'); }}
       />
     );
+  } else {
+    activeScreenContent = (
+      <EmailScreen
+        onOtpSent={(em, o, ex, driverData) => {
+          setEmail(em);
+          setOtp(o);
+          setExpiry(ex);
+          setDriver(driverData);
+          setScreen('otp');
+        }}
+      />
+    );
   }
 
   return (
-    <EmailScreen
-      onOtpSent={(em, o, ex, driverData) => {
-        setEmail(em);
-        setOtp(o);
-        setExpiry(ex);
-        setDriver(driverData); // held in memory only; saved to storage after OTP verified
-        setScreen('otp');
-      }}
-    />
+    <View style={{ flex: 1 }}>
+      {activeScreenContent}
+      <EmergencyRequestModal
+        emergency={incomingEmergency}
+        visible={incomingEmergency !== null}
+        onAccept={handleAcceptEmergency}
+        onReject={handleRejectEmergency}
+        processing={processingAction}
+      />
+    </View>
   );
 }
 
@@ -1774,6 +2336,56 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   routeSummaryValue: { fontSize: 14, color: '#111', fontWeight: '800' },
+  directionsButton: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF0F0',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FFD6DD',
+  },
+  directionsButtonActive: {
+    backgroundColor: '#F0FFF4',
+    borderColor: '#BBF7D0',
+  },
+  directionsIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FF3B5C',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  directionsIconText: {
+    color: '#FFF',
+    fontSize: 22,
+    fontWeight: '900',
+    lineHeight: 24,
+  },
+  directionsTextBlock: { flex: 1 },
+  directionsTitle: {
+    color: '#111',
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  directionsSubtitle: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 17,
+  },
+  directionsChevron: {
+    color: '#FF3B5C',
+    fontSize: 28,
+    fontWeight: '800',
+    marginLeft: 10,
+  },
   turnCard: {
     backgroundColor: '#FFF0F0',
     borderRadius: 12,
@@ -1821,6 +2433,108 @@ const styles = StyleSheet.create({
   stepInstruction: { fontSize: 13, color: '#111', fontWeight: '700', lineHeight: 18 },
   stepMeta: { fontSize: 12, color: '#888', marginTop: 2 },
 
+  navTopBanner: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    left: 16,
+    right: 16,
+    backgroundColor: '#1E293B',
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  navTurnIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#334155',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  navTurnIconText: { color: '#FFF', fontSize: 24, fontWeight: '800' },
+  navTurnText: { flex: 1 },
+  navDistanceText: { color: '#FFF', fontSize: 22, fontWeight: '800', marginBottom: 2 },
+  navInstructionText: { color: '#94A3B8', fontSize: 15, fontWeight: '600' },
+  
+  fabContainer: {
+    position: 'absolute',
+    right: 16,
+    bottom: 180,
+    alignItems: 'flex-end',
+    zIndex: 10,
+  },
+  fab: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  fabRecenter: {
+    flexDirection: 'row',
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FFF',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  fabText: { fontSize: 20 },
+  fabRecenterText: { fontSize: 15, fontWeight: '700', color: '#3B82F6', marginLeft: 8 },
+
+  navBottomPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 10,
+    zIndex: 10,
+  },
+  navSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  navEtaText: { fontSize: 26, fontWeight: '800', color: '#22C55E' },
+  navDistanceSubtext: { fontSize: 14, color: '#64748B', fontWeight: '600', marginTop: 2 },
+  navExitButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navExitText: { color: '#FF3B5C', fontSize: 18, fontWeight: '900' },
+
   profileHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingVertical: 14,
@@ -1863,4 +2577,147 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#FFD6DD',
   },
   signOutText: { color: '#FF3B5C', fontSize: 16, fontWeight: '700' },
+
+  profileLoadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  profileLoadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#888',
+    fontWeight: '500',
+  },
+  profileErrorBanner: {
+    marginHorizontal: 24,
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#FFEAEA',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFCACA',
+  },
+  profileErrorBannerText: {
+    color: '#FF3B5C',
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    paddingBottom: 12,
+  },
+  modalHeaderBadge: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FF3B5C',
+    letterSpacing: 0.5,
+  },
+  priorityBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  priorityBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  priorityCritical: { backgroundColor: '#FFEAEA' },
+  priorityHigh: { backgroundColor: '#FFF7ED' },
+  priorityMedium: { backgroundColor: '#FEFCE8' },
+  priorityLow: { backgroundColor: '#EFF6FF' },
+
+  modalBody: {
+    marginBottom: 20,
+  },
+  modalDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+  },
+  modalDetailIcon: {
+    fontSize: 20,
+    marginRight: 12,
+    marginTop: 2,
+  },
+  modalDetailText: {
+    flex: 1,
+  },
+  modalDetailLabel: {
+    fontSize: 10,
+    color: '#888',
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  modalDetailValue: {
+    fontSize: 15,
+    color: '#111',
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  modalActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalRejectButton: {
+    flex: 1,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#FFF0F0',
+    borderWidth: 1,
+    borderColor: '#FFD6DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalRejectButtonText: {
+    color: '#FF3B5C',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  modalAcceptButton: {
+    flex: 1.5,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#22C55E',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#22C55E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  modalAcceptButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
 });
