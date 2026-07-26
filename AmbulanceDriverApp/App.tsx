@@ -16,7 +16,7 @@ import {
   SafeAreaView, ScrollView, StatusBar, Dimensions,
   KeyboardAvoidingView, Platform, ActivityIndicator,
   Animated, Easing, Alert, PermissionsAndroid, NativeModules,
-  Modal,
+  Modal, PanResponder, LogBox,
 } from 'react-native';
 import firestore, {
   FieldValue,
@@ -27,7 +27,7 @@ import firestore, {
   setDoc,
   updateDoc,
 } from '@react-native-firebase/firestore';
-import Geolocation from '@react-native-community/geolocation';
+import Geolocation from 'react-native-geolocation-service';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
 import MapView, { Marker, Polyline, Region } from 'react-native-maps';
@@ -40,8 +40,12 @@ const EMAILJS_PUBLIC_KEY  = 'l-W1Mxol-x9br9Typ';
 const OTP_EXPIRY_MS       = 10 * 60 * 1000;
 const GOOGLE_MAPS_API_KEY = '***REMOVED***';
 
-const { width } = Dimensions.get('window');
+const { width, height: screenHeight } = Dimensions.get('window');
 const { DriverLocationService } = NativeModules;
+
+LogBox.ignoreLogs([
+  'VirtualizedLists should never be nested inside plain ScrollViews',
+]);
 
 // ─── Driver type ──────────────────────────────────────────────────────────────
 type Driver = {
@@ -817,6 +821,8 @@ const MapsScreen = ({
   const [tripStatusIndex, setTripStatusIndex] = useState(0);
   const [tripStatusUpdating, setTripStatusUpdating] = useState(false);
   const [error, setError] = useState('');
+  const [showHospitalModal, setShowHospitalModal] = useState(false);
+  const [hospitalSearchText, setHospitalSearchText] = useState('');
   
   // Navigation State
   const [isFollowing, setIsFollowing] = useState(true);
@@ -830,6 +836,71 @@ const MapsScreen = ({
 
   const watchId = useRef<number | null>(null);
   const mapRef = useRef<MapView | null>(null);
+
+  // Bottom Sheet
+  const SHEET_MAX_HEIGHT = screenHeight * 0.58;
+  const SHEET_MIN_HEIGHT = 180;
+  const sheetAnim = useRef(new Animated.Value(0)).current; // 0 = expanded, positive = collapsed
+  const [sheetExpanded, setSheetExpanded] = useState(true);
+  const sheetScrollEnabled = useRef(true);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dy) > 5,
+      onPanResponderMove: (_, gestureState) => {
+        const newVal = Math.max(0, Math.min(gestureState.dy, SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT));
+        sheetAnim.setValue(newVal);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const threshold = (SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT) / 3;
+        if (gestureState.dy > threshold) {
+          // Collapse
+          Animated.spring(sheetAnim, {
+            toValue: SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT,
+            useNativeDriver: false,
+            bounciness: 4,
+          }).start(() => {
+            setSheetExpanded(false);
+            sheetScrollEnabled.current = false;
+          });
+        } else {
+          // Expand
+          Animated.spring(sheetAnim, {
+            toValue: 0,
+            useNativeDriver: false,
+            bounciness: 4,
+          }).start(() => {
+            setSheetExpanded(true);
+            sheetScrollEnabled.current = true;
+          });
+        }
+      },
+    }),
+  ).current;
+
+  const expandSheet = () => {
+    Animated.spring(sheetAnim, {
+      toValue: 0,
+      useNativeDriver: false,
+      bounciness: 4,
+    }).start(() => {
+      setSheetExpanded(true);
+      sheetScrollEnabled.current = true;
+    });
+  };
+
+  const collapseSheet = () => {
+    Animated.spring(sheetAnim, {
+      toValue: SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT,
+      useNativeDriver: false,
+      bounciness: 4,
+    }).start(() => {
+      setSheetExpanded(false);
+      sheetScrollEnabled.current = false;
+    });
+  };
 
   const initialRegion: Region = {
     latitude: liveLocation?.latitude ?? 20.5937,
@@ -1231,6 +1302,14 @@ const MapsScreen = ({
 
     const nextIndex = Math.min(tripStatusIndex + 1, TRIP_STATUS_STEPS.length - 1);
     const nextStatus = TRIP_STATUS_STEPS[nextIndex];
+
+    // Intercept: when advancing to patient_onboard, show hospital selection first
+    if (nextStatus.value === 'patient_onboard') {
+      setHospitalSearchText(driver['Hospital Name'] || '');
+      setShowHospitalModal(true);
+      return;
+    }
+
     setTripStatusUpdating(true);
     setError('');
 
@@ -1257,6 +1336,52 @@ const MapsScreen = ({
     } finally {
       setTripStatusUpdating(false);
     }
+  };
+
+  const handleHospitalSelected = async (
+    hospitalAddress: string,
+    hospitalCoordinate: Coordinate | null,
+  ) => {
+    setShowHospitalModal(false);
+
+    // Update destination to the selected hospital
+    setDestinationText(hospitalAddress);
+    if (hospitalCoordinate) {
+      setDestinationCoordinate(hospitalCoordinate);
+    } else {
+      setDestinationCoordinate(null);
+    }
+
+    // Advance trip status to patient_onboard
+    const nextIndex = TRIP_STATUS_STEPS.findIndex(s => s.value === 'patient_onboard');
+    if (nextIndex >= 0) {
+      setTripStatusUpdating(true);
+      setError('');
+      try {
+        await writeTripStatus('patient_onboard');
+        setTripStatusIndex(nextIndex);
+      } catch (e: any) {
+        console.error('Trip status update:', e.message);
+        setError('Could not update trip status. Please try again.');
+      } finally {
+        setTripStatusUpdating(false);
+      }
+    }
+
+    // Clear old route data and recalculate from live location to hospital
+    setRouteCoordinates([]);
+    setRouteSteps([]);
+    setActiveStepIndex(0);
+    setEta('');
+    setDistance('');
+    lastRouteFetchLocationRef.current = null;
+    lastRouteFetchTimeRef.current = 0;
+    isFetchingRouteRef.current = false;
+
+    // Small delay to allow state to settle, then fetch new route
+    setTimeout(() => {
+      fetchRoute(false);
+    }, 300);
   };
 
   return (
@@ -1289,10 +1414,14 @@ const MapsScreen = ({
         }}
       >
         {liveLocation && !directionsActive && (
-          <Marker coordinate={liveLocation} title="Driver location" />
+          <Marker coordinate={liveLocation} title="Driver location" pinColor="#3B82F6" />
         )}
         {liveLocation && directionsActive && (
-          <Marker coordinate={liveLocation} anchor={{ x: 0.5, y: 0.5 }}>
+          <Marker
+            coordinate={liveLocation}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
             <NavigationArrow heading={heading || (activeStep ? calculateBearing(liveLocation, activeStep.endLocation) : 0)} />
           </Marker>
         )}
@@ -1308,7 +1437,33 @@ const MapsScreen = ({
         )}
       </MapView>
 
-      <View style={styles.routePanel}>
+      {/* ── Draggable Bottom Sheet ── */}
+      <Animated.View
+        style={[
+          styles.bottomSheet,
+          {
+            maxHeight: SHEET_MAX_HEIGHT,
+            transform: [{ translateY: sheetAnim }],
+          },
+        ]}
+      >
+        {/* Drag Handle */}
+        <View {...panResponder.panHandlers} style={styles.sheetHandleArea}>
+          <View style={styles.sheetHandle} />
+          {!sheetExpanded && (
+            <TouchableOpacity onPress={expandSheet} activeOpacity={0.7}>
+              <Text style={styles.sheetExpandHint}>Swipe up for trip details</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <ScrollView
+          nestedScrollEnabled
+          scrollEnabled={sheetExpanded}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.sheetScrollContent}
+        >
           <View style={styles.routeInputsRow}>
             <View style={styles.routeInputs}>
               <TextInput
@@ -1323,6 +1478,7 @@ const MapsScreen = ({
                 fetchDetails
                 minLength={2}
                 debounce={300}
+                disableScroll={true}
                 nearbyPlacesAPI="GooglePlacesSearch"
                 enablePoweredByContainer={false}
                 onPress={(data, details = null) => {
@@ -1468,6 +1624,7 @@ const MapsScreen = ({
             </View>
           )}
 
+          {/* ── Redesigned Directions Button ── */}
           <TouchableOpacity
             style={[
               styles.directionsButton,
@@ -1478,30 +1635,28 @@ const MapsScreen = ({
             disabled={routeSteps.length === 0}
             activeOpacity={0.85}
           >
-            <View style={styles.directionsIcon}>
-              <Text style={styles.directionsIconText}>↱</Text>
+            <View style={styles.directionsIconCentered}>
+              <Svg width={22} height={22} viewBox="0 0 24 24">
+                <Path
+                  d="M12 2L4.5 20.3L5.2 21L12 18L18.8 21L19.5 20.3L12 2Z"
+                  fill="#FFFFFF"
+                />
+              </Svg>
             </View>
-            <View style={styles.directionsTextBlock}>
-              <Text style={styles.directionsTitle}>
-                {directionsActive ? 'Navigating' : 'Directions'}
-              </Text>
-              <Text style={styles.directionsSubtitle} numberOfLines={2}>
-                {directionsActive && activeStep
-                  ? `${activeStep.instruction} • ${activeStep.distance}`
-                  : routeSteps.length > 0
-                    ? 'Start turn-by-turn navigation'
-                    : 'Show a route to enable directions'}
-              </Text>
-            </View>
-            <Text style={styles.directionsChevron}>›</Text>
+            <Text style={styles.directionsTitleCentered}>
+              {directionsActive ? 'Navigating' : 'Start Navigation'}
+            </Text>
+            <Text style={styles.directionsSubtitleCentered} numberOfLines={2}>
+              {directionsActive && activeStep
+                ? `${activeStep.instruction} • ${activeStep.distance}`
+                : routeSteps.length > 0
+                  ? 'Tap to begin turn-by-turn'
+                  : 'Show a route to enable'}
+            </Text>
           </TouchableOpacity>
 
           {routeSteps.length > 0 && (
-            <ScrollView
-              style={styles.stepsList}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-            >
+            <View style={styles.stepsList}>
               {routeSteps.slice(activeStepIndex, activeStepIndex + 4).map((step, index) => (
                 <View key={`${step.instruction}-${index}`} style={styles.stepRow}>
                   <Text style={styles.stepNumber}>{activeStepIndex + index + 1}</Text>
@@ -1511,9 +1666,93 @@ const MapsScreen = ({
                   </View>
                 </View>
               ))}
-            </ScrollView>
+            </View>
           )}
+        </ScrollView>
+      </Animated.View>
+
+      {/* ── Hospital Selection Modal ── */}
+      <Modal
+        visible={showHospitalModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowHospitalModal(false)}
+      >
+        <View style={styles.hospitalModalOverlay}>
+          <View style={styles.hospitalModalCard}>
+            <View style={styles.hospitalModalHeader}>
+              <View>
+                <Text style={styles.hospitalModalBadge}>SELECT HOSPITAL</Text>
+                <Text style={styles.hospitalModalTitle}>Where to take the patient?</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowHospitalModal(false)}
+                style={styles.hospitalModalClose}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.hospitalModalCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.hospitalModalBody}>
+              <GooglePlacesAutocomplete
+                placeholder="Search hospital address..."
+                fetchDetails
+                minLength={2}
+                debounce={300}
+                nearbyPlacesAPI="GooglePlacesSearch"
+                enablePoweredByContainer={false}
+                onPress={(data, details = null) => {
+                  const coord = details?.geometry?.location
+                    ? { latitude: details.geometry.location.lat, longitude: details.geometry.location.lng }
+                    : null;
+                  handleHospitalSelected(data.description, coord);
+                }}
+                onFail={e => {
+                  console.error('Hospital places error:', e);
+                }}
+                query={{
+                  key: GOOGLE_MAPS_API_KEY,
+                  language: 'en',
+                  components: 'country:in',
+                  type: 'hospital',
+                }}
+                textInputProps={{
+                  value: hospitalSearchText,
+                  onChangeText: setHospitalSearchText,
+                  placeholderTextColor: '#AAAAAA',
+                  autoCapitalize: 'words',
+                  autoFocus: true,
+                }}
+                styles={{
+                  container: { flex: 0, zIndex: 20 },
+                  textInput: styles.hospitalModalInput,
+                  listView: styles.hospitalModalList,
+                  row: styles.placesRow,
+                  description: styles.placesDescription,
+                  separator: styles.placesSeparator,
+                }}
+              />
+            </View>
+
+            <View style={styles.hospitalModalFooter}>
+              <TouchableOpacity
+                style={styles.hospitalModalSkipBtn}
+                onPress={() => {
+                  // Skip hospital selection — proceed with existing destination
+                  handleHospitalSelected(
+                    destinationText || driver['Hospital Name'] || '',
+                    destinationCoordinate,
+                  );
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.hospitalModalSkipText}>Use Current Destination</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -2209,6 +2448,38 @@ const styles = StyleSheet.create({
     maxHeight: '58%',
     overflow: 'visible',
   },
+  bottomSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 12,
+    overflow: 'visible',
+  },
+  sheetHandleArea: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#D1D5DB',
+  },
+  sheetExpandHint: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '600',
+    marginTop: 6,
+  },
+  sheetScrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+  },
   routeInputsRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -2337,13 +2608,13 @@ const styles = StyleSheet.create({
   },
   routeSummaryValue: { fontSize: 14, color: '#111', fontWeight: '800' },
   directionsButton: {
-    minHeight: 64,
-    flexDirection: 'row',
+    minHeight: 72,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#FFF0F0',
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 14,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#FFD6DD',
@@ -2351,6 +2622,15 @@ const styles = StyleSheet.create({
   directionsButtonActive: {
     backgroundColor: '#F0FFF4',
     borderColor: '#BBF7D0',
+  },
+  directionsIconCentered: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FF3B5C',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
   directionsIcon: {
     width: 38,
@@ -2368,6 +2648,20 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   directionsTextBlock: { flex: 1 },
+  directionsTitleCentered: {
+    color: '#111',
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  directionsSubtitleCentered: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 17,
+    textAlign: 'center',
+  },
   directionsTitle: {
     color: '#111',
     fontSize: 16,
@@ -2385,6 +2679,103 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '800',
     marginLeft: 10,
+  },
+  hospitalModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-end',
+  },
+  hospitalModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    minHeight: screenHeight * 0.45,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  hospitalModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    paddingBottom: 14,
+  },
+  hospitalModalBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FF3B5C',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  hospitalModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111',
+  },
+  hospitalModalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hospitalModalCloseText: {
+    fontSize: 16,
+    color: '#888',
+    fontWeight: '700',
+  },
+  hospitalModalBody: {
+    flex: 1,
+    minHeight: 200,
+    zIndex: 20,
+  },
+  hospitalModalInput: {
+    height: 48,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    fontSize: 15,
+    color: '#222',
+    borderWidth: 1,
+    borderColor: '#FFD6DD',
+  },
+  hospitalModalList: {
+    backgroundColor: '#FFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+    marginTop: 4,
+    elevation: 8,
+    zIndex: 30,
+  },
+  hospitalModalFooter: {
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    paddingTop: 14,
+  },
+  hospitalModalSkipBtn: {
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#FFF0F0',
+    borderWidth: 1,
+    borderColor: '#FFD6DD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hospitalModalSkipText: {
+    color: '#FF3B5C',
+    fontSize: 14,
+    fontWeight: '700',
   },
   turnCard: {
     backgroundColor: '#FFF0F0',
