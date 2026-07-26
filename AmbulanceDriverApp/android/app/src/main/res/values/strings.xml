@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">AmbulanceDriverApp</string>
+    <string name="app_name">AmbuGrid</string>
     <string name="google_maps_api_key">***REMOVED***</string>
     <string name="tracking_channel_name">Ambulance live tracking</string>
 </resources>

@@ -10,13 +10,14 @@
  * - Logout sets Availability → inactive + clears location
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   SafeAreaView, ScrollView, StatusBar, Dimensions,
   KeyboardAvoidingView, Platform, ActivityIndicator,
   Animated, Easing, Alert, PermissionsAndroid, NativeModules,
-  Modal, PanResponder, LogBox,
+  Modal, PanResponder, LogBox, BackHandler, AppState,
+  useWindowDimensions,
 } from 'react-native';
 import firestore, {
   FieldValue,
@@ -34,35 +35,58 @@ import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
 // ─── EmailJS ──────────────────────────────────────────────────────────────────
-const EMAILJS_SERVICE_ID  = 'service_k1f34qu';
+const EMAILJS_SERVICE_ID = 'service_k1f34qu';
 const EMAILJS_TEMPLATE_ID = 'template_1ta0fsw';
-const EMAILJS_PUBLIC_KEY  = 'l-W1Mxol-x9br9Typ';
-const OTP_EXPIRY_MS       = 10 * 60 * 1000;
+const EMAILJS_PUBLIC_KEY = 'l-W1Mxol-x9br9Typ';
+const OTP_EXPIRY_MS = 10 * 60 * 1000;
 const GOOGLE_MAPS_API_KEY = '***REMOVED***';
 
-const { width, height: screenHeight } = Dimensions.get('window');
+const INITIAL_SCREEN = Dimensions.get('window');
 const { DriverLocationService } = NativeModules;
 
 LogBox.ignoreLogs([
   'VirtualizedLists should never be nested inside plain ScrollViews',
 ]);
 
+// ─── Responsive scaling ──────────────────────────────────────────────────────
+const BASE_WIDTH = 375;
+
+const wp = (pct: number, w: number) => Math.round((pct / 100) * w);
+const hp = (pct: number, h: number) => Math.round((pct / 100) * h);
+const ms = (size: number, w: number, factor: number = 0.5): number => {
+  const scale = w / BASE_WIDTH;
+  return Math.round(size + (scale * size - size) * factor);
+};
+const clamp = (val: number, min: number, max: number) => Math.min(Math.max(val, min), max);
+
+// ─── State persistence ───────────────────────────────────────────────────────
+const APP_STATE_KEY = 'appState';
+const STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// ─── Dynamic styles hook ─────────────────────────────────────────────────────
+// createStyles is defined later in the file but referenced here through closure;
+// it is initialized by the time any React component renders.
+function useAppStyles() {
+  const { width: w, height: h } = useWindowDimensions();
+  return useMemo(() => createStyles(w, h), [w, h]);
+}
+
 // ─── Driver type ──────────────────────────────────────────────────────────────
 type Driver = {
-  'Name'?:          string;
-  'Email ID'?:      string;
-  'Phone Number'?:  string;
-  'Gender'?:        string;
+  'Name'?: string;
+  'Email ID'?: string;
+  'Phone Number'?: string;
+  'Gender'?: string;
   'Hospital Name'?: string;
-  'Role'?:          string;
-  'City'?:          string;
-  'State'?:         string;
+  'Role'?: string;
+  'City'?: string;
+  'State'?: string;
   'licenseNumber'?: string;
   'aadhaarNumber'?: string;
-  'hospitalId'?:    string;
-  'Documents'?:     string;
-  docId?:           string;
-  [key: string]:    any;
+  'hospitalId'?: string;
+  'Documents'?: string;
+  docId?: string;
+  [key: string]: any;
 };
 
 // ─── Emergency type ───────────────────────────────────────────────────────────
@@ -129,10 +153,10 @@ const sendOtpEmail = async (toEmail: string, otp: string) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      service_id:  EMAILJS_SERVICE_ID,
+      service_id: EMAILJS_SERVICE_ID,
       template_id: EMAILJS_TEMPLATE_ID,
-      user_id:     EMAILJS_PUBLIC_KEY,
-      template_params: { to_email: toEmail, otp, app_name: 'AmbulanceDriver' },
+      user_id: EMAILJS_PUBLIC_KEY,
+      template_params: { to_email: toEmail, otp, app_name: 'AmbuGrid' },
     }),
   });
   if (!res.ok) throw new Error(`EmailJS ${res.status}: ${await res.text()}`);
@@ -218,7 +242,7 @@ const distanceMeters = (a: Coordinate, b: Coordinate) => {
   const h =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1) * Math.cos(lat2) *
-      Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
   return 2 * earthRadius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 };
@@ -244,7 +268,7 @@ const requestLocationPermission = async (): Promise<boolean> => {
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       {
         title: 'Location Permission',
-        message: 'AmbulanceDriver needs your location to track your position.',
+        message: 'AmbuGrid needs your location to track your position.',
         buttonPositive: 'Allow',
         buttonNegative: 'Deny',
       },
@@ -257,7 +281,7 @@ const requestLocationPermission = async (): Promise<boolean> => {
         {
           title: 'Background Location Permission',
           message:
-            'AmbulanceDriver needs background location to track you while the app is in the background.',
+            'AmbuGrid needs background location to track you while the app is in the background.',
           buttonPositive: 'Allow',
           buttonNegative: 'Deny',
         },
@@ -274,7 +298,7 @@ const requestLocationPermission = async (): Promise<boolean> => {
         await PermissionsAndroid.request(notificationPermission, {
           title: 'Tracking Notification Permission',
           message:
-            'AmbulanceDriver shows a persistent notification while live trip tracking is active.',
+            'AmbuGrid shows a persistent notification while live trip tracking is active.',
           buttonPositive: 'Allow',
           buttonNegative: 'Deny',
         });
@@ -286,32 +310,36 @@ const requestLocationPermission = async (): Promise<boolean> => {
 };
 
 // ─── Illustration ─────────────────────────────────────────────────────────────
-const HeaderIllustration = () => (
-  <Svg width={width} height={200} viewBox="0 0 375 200">
-    <Path d="M0 0 H375 V200 H0 Z" fill="#FFF5F7" />
-    <Path
-      d="M30 190 Q80 170 120 150 Q170 125 200 140 Q240 158 270 135 Q310 110 340 80 Q360 60 370 40"
-      stroke="#FF3B5C" strokeWidth="2.5" fill="none" strokeDasharray="6 4"
-    />
-    <Circle cx="60" cy="138" r="22" fill="#FFD6DD" />
-    <Line x1="60"  y1="160" x2="60"  y2="183" stroke="#FF3B5C" strokeWidth="2" />
-    <Line x1="95"  y1="113" x2="95"  y2="158" stroke="#FF3B5C" strokeWidth="2" />
-    <Line x1="95"  y1="123" x2="82"  y2="138" stroke="#FF3B5C" strokeWidth="1.5" />
-    <Line x1="95"  y1="131" x2="108" y2="143" stroke="#FF3B5C" strokeWidth="1.5" />
-    <Path d="M170 128 H210 V158 H170 Z" fill="#FFD6DD" stroke="#FF3B5C" strokeWidth="1" />
-    <Ellipse cx="285" cy="158" rx="22" ry="6" fill="#FFD6DD" />
-    <Line x1="285" y1="151" x2="285" y2="113" stroke="#FF3B5C" strokeWidth="1.5" />
-    <Path d="M285 115 L305 138 L285 141 Z" fill="#FFF5F7" stroke="#FF3B5C" strokeWidth="1" />
-    <Polygon points="240,73 270,23 300,73"  fill="#FF3B5C" />
-    <Polygon points="265,73 300,13 335,73"  fill="#FF3B5C" />
-    <Polygon points="270,25 280,43 260,43"  fill="#FF8FA3" />
-    <Polygon points="300,15 312,35 288,35"  fill="#FF8FA3" />
-    <Circle cx="60" cy="193" r="5" fill="#FF3B5C" />
-  </Svg>
-);
+const HeaderIllustration = () => {
+  const { width: screenW } = useWindowDimensions();
+  return (
+    <Svg width={screenW} height={200} viewBox="0 0 375 200">
+      <Path d="M0 0 H375 V200 H0 Z" fill="#FFF5F7" />
+      <Path
+        d="M30 190 Q80 170 120 150 Q170 125 200 140 Q240 158 270 135 Q310 110 340 80 Q360 60 370 40"
+        stroke="#FF3B5C" strokeWidth="2.5" fill="none" strokeDasharray="6 4"
+      />
+      <Circle cx="60" cy="138" r="22" fill="#FFD6DD" />
+      <Line x1="60" y1="160" x2="60" y2="183" stroke="#FF3B5C" strokeWidth="2" />
+      <Line x1="95" y1="113" x2="95" y2="158" stroke="#FF3B5C" strokeWidth="2" />
+      <Line x1="95" y1="123" x2="82" y2="138" stroke="#FF3B5C" strokeWidth="1.5" />
+      <Line x1="95" y1="131" x2="108" y2="143" stroke="#FF3B5C" strokeWidth="1.5" />
+      <Path d="M170 128 H210 V158 H170 Z" fill="#FFD6DD" stroke="#FF3B5C" strokeWidth="1" />
+      <Ellipse cx="285" cy="158" rx="22" ry="6" fill="#FFD6DD" />
+      <Line x1="285" y1="151" x2="285" y2="113" stroke="#FF3B5C" strokeWidth="1.5" />
+      <Path d="M285 115 L305 138 L285 141 Z" fill="#FFF5F7" stroke="#FF3B5C" strokeWidth="1" />
+      <Polygon points="240,73 270,23 300,73" fill="#FF3B5C" />
+      <Polygon points="265,73 300,13 335,73" fill="#FF3B5C" />
+      <Polygon points="270,25 280,43 260,43" fill="#FF8FA3" />
+      <Polygon points="300,15 312,35 288,35" fill="#FF8FA3" />
+      <Circle cx="60" cy="193" r="5" fill="#FF3B5C" />
+    </Svg>
+  );
+};
 
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 const Avatar = ({ name, size = 48 }: { name: string; size?: number }) => {
+  const styles = useAppStyles();
   const initials = name
     .split(' ')
     .map(w => w[0] ?? '')
@@ -342,9 +370,10 @@ const EmailScreen = ({
 }: {
   onOtpSent: (email: string, otp: string, expiry: number, driver: Driver) => void;
 }) => {
-  const [email,   setEmail]   = useState('');
+  const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState('');
+  const [error, setError] = useState('');
+  const styles = useAppStyles();
 
   const handleSend = async () => {
     const cleaned = email.trim().toLowerCase();
@@ -367,9 +396,9 @@ const EmailScreen = ({
         return;
       }
 
-      const doc    = snap.docs[0];
+      const doc = snap.docs[0];
       const driver = { ...doc.data(), docId: doc.id } as Driver;
-      const otp    = generateOtp();
+      const otp = generateOtp();
       const expiry = Date.now() + OTP_EXPIRY_MS;
 
       await sendOtpEmail(cleaned, otp);
@@ -442,9 +471,10 @@ const OtpScreen = ({
   email: string; expectedOtp: string; otpExpiry: number;
   onVerified: () => void; onBack: () => void;
 }) => {
-  const [otp,      setOtp]      = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState('');
+  const [otp, setOtp] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const styles = useAppStyles();
   const [timeLeft, setTimeLeft] = useState(
     Math.ceil((otpExpiry - Date.now()) / 1000),
   );
@@ -551,9 +581,10 @@ const HomeScreen = ({
   onOpenMaps: () => void;
 }) => {
   const [availability, setAvailability] = useState<AvailabilityStatus>(initialAvailability);
-  const [toggling,     setToggling]     = useState(false);
-  const locationWatchId                 = useRef<number | null>(null);
-  const pulse                           = useRef(new Animated.Value(1)).current;
+  const [toggling, setToggling] = useState(false);
+  const styles = useAppStyles();
+  const locationWatchId = useRef<number | null>(null);
+  const pulse = useRef(new Animated.Value(1)).current;
 
   // Pulse animation
   useEffect(() => {
@@ -597,8 +628,8 @@ const HomeScreen = ({
       stopLocationTracking();
     }
     return () => stopLocationTracking();
-  // startLocationTracking reads the latest driver doc id inside the effect.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // startLocationTracking reads the latest driver doc id inside the effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availability]);
 
   const startLocationTracking = async () => {
@@ -757,13 +788,13 @@ const HomeScreen = ({
             {toggling
               ? <ActivityIndicator color="#FFF" size="large" />
               : <>
-                  <Text style={styles.emergencyButtonIcon}>
-                    {isBusy ? '🚑' : '▶'}
-                  </Text>
-                  <Text style={styles.emergencyButtonLabel}>
-                    {isBusy ? 'End\nDuty' : 'Go On\nDuty'}
-                  </Text>
-                </>
+                <Text style={styles.emergencyButtonIcon}>
+                  {isBusy ? '🚑' : '▶'}
+                </Text>
+                <Text style={styles.emergencyButtonLabel}>
+                  {isBusy ? 'End\nDuty' : 'Go On\nDuty'}
+                </Text>
+              </>
             }
           </View>
         </TouchableOpacity>
@@ -803,8 +834,12 @@ const HomeScreen = ({
 // ═════════════════════════════════════════════════════════════════════════════
 const MapsScreen = ({
   driver, activeEmergency, onTripComplete, onProfile,
+  showHospitalModal, setShowHospitalModal,
+  onRegisterSheetControls,
 }: {
   driver: Driver; activeEmergency?: Emergency | null; onTripComplete: () => void; onProfile: () => void;
+  showHospitalModal: boolean; setShowHospitalModal: (v: boolean) => void;
+  onRegisterSheetControls: (controls: { isExpanded: () => boolean; collapse: () => void }) => void;
 }) => {
   const [currentLocationText, setCurrentLocationText] = useState('');
   const [destinationText, setDestinationText] = useState('');
@@ -821,9 +856,10 @@ const MapsScreen = ({
   const [tripStatusIndex, setTripStatusIndex] = useState(0);
   const [tripStatusUpdating, setTripStatusUpdating] = useState(false);
   const [error, setError] = useState('');
-  const [showHospitalModal, setShowHospitalModal] = useState(false);
   const [hospitalSearchText, setHospitalSearchText] = useState('');
-  
+  const styles = useAppStyles();
+  const { height: scrH } = useWindowDimensions();
+
   // Navigation State
   const [isFollowing, setIsFollowing] = useState(true);
   const [isVoiceMuted, setIsVoiceMuted] = useState(false);
@@ -838,10 +874,14 @@ const MapsScreen = ({
   const mapRef = useRef<MapView | null>(null);
 
   // Bottom Sheet
-  const SHEET_MAX_HEIGHT = screenHeight * 0.58;
   const SHEET_MIN_HEIGHT = 180;
+  const sheetMaxHeight = scrH * 0.58;
+  const sheetMaxHeightRef = useRef(sheetMaxHeight);
+  sheetMaxHeightRef.current = sheetMaxHeight;
   const sheetAnim = useRef(new Animated.Value(0)).current; // 0 = expanded, positive = collapsed
   const [sheetExpanded, setSheetExpanded] = useState(true);
+  const sheetExpandedRef = useRef(true);
+  sheetExpandedRef.current = sheetExpanded;
   const sheetScrollEnabled = useRef(true);
 
   const panResponder = useRef(
@@ -850,15 +890,17 @@ const MapsScreen = ({
       onMoveShouldSetPanResponder: (_, gestureState) =>
         Math.abs(gestureState.dy) > 5,
       onPanResponderMove: (_, gestureState) => {
-        const newVal = Math.max(0, Math.min(gestureState.dy, SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT));
+        const maxH = sheetMaxHeightRef.current;
+        const newVal = Math.max(0, Math.min(gestureState.dy, maxH - SHEET_MIN_HEIGHT));
         sheetAnim.setValue(newVal);
       },
       onPanResponderRelease: (_, gestureState) => {
-        const threshold = (SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT) / 3;
+        const maxH = sheetMaxHeightRef.current;
+        const threshold = (maxH - SHEET_MIN_HEIGHT) / 3;
         if (gestureState.dy > threshold) {
           // Collapse
           Animated.spring(sheetAnim, {
-            toValue: SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT,
+            toValue: maxH - SHEET_MIN_HEIGHT,
             useNativeDriver: false,
             bounciness: 4,
           }).start(() => {
@@ -880,7 +922,7 @@ const MapsScreen = ({
     }),
   ).current;
 
-  const expandSheet = () => {
+  const expandSheet = useCallback(() => {
     Animated.spring(sheetAnim, {
       toValue: 0,
       useNativeDriver: false,
@@ -889,18 +931,26 @@ const MapsScreen = ({
       setSheetExpanded(true);
       sheetScrollEnabled.current = true;
     });
-  };
+  }, [sheetAnim]);
 
-  const collapseSheet = () => {
+  const collapseSheet = useCallback(() => {
     Animated.spring(sheetAnim, {
-      toValue: SHEET_MAX_HEIGHT - SHEET_MIN_HEIGHT,
+      toValue: sheetMaxHeightRef.current - SHEET_MIN_HEIGHT,
       useNativeDriver: false,
       bounciness: 4,
     }).start(() => {
       setSheetExpanded(false);
       sheetScrollEnabled.current = false;
     });
-  };
+  }, [sheetAnim]);
+
+  // Register sheet controls for parent back handler
+  useEffect(() => {
+    onRegisterSheetControls({
+      isExpanded: () => sheetExpandedRef.current,
+      collapse: collapseSheet,
+    });
+  }, [onRegisterSheetControls, collapseSheet]);
 
   const initialRegion: Region = {
     latitude: liveLocation?.latitude ?? 20.5937,
@@ -970,8 +1020,8 @@ const MapsScreen = ({
       .catch(e => console.error('Create tripStatus field:', e));
     startPersistentDriverTracking(driver.docId)
       .catch(e => console.error('Start persistent tracking:', e));
-  // writeTripStatus is scoped to the current driver doc id.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // writeTripStatus is scoped to the current driver doc id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driver.docId]);
 
   useEffect(() => {
@@ -1029,8 +1079,8 @@ const MapsScreen = ({
         watchId.current = null;
       }
     };
-  // updateDriverLocation is intentionally local to this screen and writes latest GPS samples.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // updateDriverLocation is intentionally local to this screen and writes latest GPS samples.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driver.docId]);
 
   // 1. Live Address Update on GPS movement
@@ -1442,7 +1492,7 @@ const MapsScreen = ({
         style={[
           styles.bottomSheet,
           {
-            maxHeight: SHEET_MAX_HEIGHT,
+            maxHeight: sheetMaxHeight,
             transform: [{ translateY: sheetAnim }],
           },
         ]}
@@ -1768,9 +1818,10 @@ const ProfileScreen = ({
   const [profileData, setProfileData] = useState<Driver | null>(driver);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
+  const styles = useAppStyles();
 
   useEffect(() => {
-    let unsubscribe: () => void = () => {};
+    let unsubscribe: () => void = () => { };
 
     const fetchDriverProfile = async () => {
       setLoading(true);
@@ -1829,17 +1880,17 @@ const ProfileScreen = ({
   }, [driver]);
 
   const fields: { label: string; key: keyof Driver; icon: string }[] = [
-    { label: 'Name',           key: 'Name',          icon: '👤' },
-    { label: 'Role',           key: 'Role',          icon: '🪪' },
-    { label: 'Email',          key: 'Email ID',      icon: '✉️' },
-    { label: 'Phone Number',   key: 'Phone Number',  icon: '📞' },
-    { label: 'Gender',         key: 'Gender',        icon: '⚧'  },
-    { label: 'City',           key: 'City',          icon: '🏙️' },
-    { label: 'State',          key: 'State',         icon: '📍' },
-    { label: 'Hospital Name',  key: 'Hospital Name', icon: '🏥' },
+    { label: 'Name', key: 'Name', icon: '👤' },
+    { label: 'Role', key: 'Role', icon: '🪪' },
+    { label: 'Email', key: 'Email ID', icon: '✉️' },
+    { label: 'Phone Number', key: 'Phone Number', icon: '📞' },
+    { label: 'Gender', key: 'Gender', icon: '⚧' },
+    { label: 'City', key: 'City', icon: '🏙️' },
+    { label: 'State', key: 'State', icon: '📍' },
+    { label: 'Hospital Name', key: 'Hospital Name', icon: '🏥' },
     { label: 'License Number', key: 'licenseNumber', icon: '📄' },
     { label: 'Aadhaar Number', key: 'aadhaarNumber', icon: '🆔' },
-    { label: 'Hospital ID',    key: 'hospitalId',    icon: '🏢' },
+    { label: 'Hospital ID', key: 'hospitalId', icon: '🏢' },
   ];
 
   const getFieldValue = (val: any): string => {
@@ -1958,6 +2009,7 @@ const EmergencyRequestModal = ({
   onReject: (emerg: Emergency) => void;
   processing: boolean;
 }) => {
+  const styles = useAppStyles();
   if (!emergency || !visible) return null;
 
   const priorityLower = (emergency.priority || 'medium').toLowerCase();
@@ -1971,7 +2023,7 @@ const EmergencyRequestModal = ({
       transparent
       animationType="fade"
       visible={visible}
-      onRequestClose={() => {}}
+      onRequestClose={() => { }}
     >
       <View style={styles.modalOverlay}>
         <View style={styles.modalCard}>
@@ -2049,11 +2101,12 @@ const EmergencyRequestModal = ({
 // ROOT APP
 // ═════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [screen,  setScreen]  = useState<Screen>('email');
-  const [email,   setEmail]   = useState('');
-  const [otp,     setOtp]     = useState('');
-  const [expiry,  setExpiry]  = useState(0);
-  const [driver,  setDriver]  = useState<Driver | null>(null);
+  const styles = useAppStyles();
+  const [screen, setScreen] = useState<Screen>('email');
+  const [email, setEmail] = useState('');
+  const [otp, setOtp] = useState('');
+  const [expiry, setExpiry] = useState(0);
+  const [driver, setDriver] = useState<Driver | null>(null);
   const [loading, setLoading] = useState(true);
   const [homeAvailability, setHomeAvailability] =
     useState<AvailabilityStatus>('available');
@@ -2064,6 +2117,131 @@ export default function App() {
   const [activeEmergency, setActiveEmergency] = useState<Emergency | null>(null);
   const [processingAction, setProcessingAction] = useState<boolean>(false);
   const handledEmergencyIds = useRef<Set<string>>(new Set());
+
+  // Lifted from MapsScreen for back-handler access
+  const [showHospitalModal, setShowHospitalModal] = useState(false);
+
+  // Sheet control ref (populated by MapsScreen via callback)
+  const sheetControlsRef = useRef<{ isExpanded: () => boolean; collapse: () => void } | null>(null);
+  const registerSheetControls = useCallback(
+    (controls: { isExpanded: () => boolean; collapse: () => void }) => {
+      sheetControlsRef.current = controls;
+    },
+    [],
+  );
+
+  // Track previous screen for profile back-navigation
+  const previousScreenRef = useRef<Screen>('home');
+  const navigateToProfile = useCallback(() => {
+    previousScreenRef.current = screen;
+    setScreen('profile');
+  }, [screen]);
+
+  // ── Back handler (Android back button / back gesture) ──────────────────────
+  const handleBackRef = useRef<() => boolean>(() => false);
+
+  useEffect(() => {
+    handleBackRef.current = (): boolean => {
+      // 1. Emergency modal showing — block back (requires explicit action)
+      if (incomingEmergency !== null) return true;
+
+      // 2. Hospital selection modal open — dismiss it
+      if (showHospitalModal) {
+        setShowHospitalModal(false);
+        return true;
+      }
+
+      // 3. Screen-specific behavior
+      switch (screen) {
+        case 'profile':
+          setScreen(previousScreenRef.current);
+          return true;
+
+        case 'maps':
+          // If bottom sheet is expanded, collapse first
+          if (sheetControlsRef.current?.isExpanded()) {
+            sheetControlsRef.current.collapse();
+            return true;
+          }
+          // Navigate back to home
+          setActiveEmergency(null);
+          setHomeAvailability('busy');
+          setMarkHomeAvailable(false);
+          setScreen('home');
+          return true;
+
+        case 'otp':
+          setOtp('');
+          setDriver(null);
+          setScreen('email');
+          return true;
+
+        case 'home':
+          Alert.alert(
+            'Exit App',
+            'Are you sure you want to exit?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Exit', style: 'destructive', onPress: () => BackHandler.exitApp() },
+            ],
+          );
+          return true;
+
+        case 'email':
+          return false; // Allow default back (exit)
+
+        default:
+          return false;
+      }
+    };
+  }, [screen, incomingEmergency, showHospitalModal]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () =>
+      handleBackRef.current(),
+    );
+    return () => subscription.remove();
+  }, []);
+
+  // ── iOS swipe-from-left-edge gesture ────────────────────────────────────────
+  const iosSwipePanResponder = useMemo(
+    () =>
+      Platform.OS === 'ios'
+        ? PanResponder.create({
+          onStartShouldSetPanResponder: (evt) =>
+            (evt.nativeEvent.pageX || 0) < 25,
+          onMoveShouldSetPanResponder: (_, gs) =>
+            gs.dx > 15 && Math.abs(gs.dy) < gs.dx,
+          onPanResponderRelease: (_, gs) => {
+            if (gs.dx > 60) handleBackRef.current();
+          },
+        })
+        : null,
+    [],
+  );
+
+  // ── Persist app state when app goes to background ──────────────────────────
+  useEffect(() => {
+    const handleAppState = async (next: string) => {
+      if (next === 'background' || next === 'inactive') {
+        try {
+          const toSave = {
+            screen,
+            homeAvailability,
+            markHomeAvailable,
+            activeEmergency,
+            email,
+            savedAt: Date.now(),
+          };
+          await AsyncStorage.setItem(APP_STATE_KEY, JSON.stringify(toSave));
+        } catch (e) {
+          console.error('State persist error:', e);
+        }
+      }
+    };
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [screen, homeAvailability, markHomeAvailable, activeEmergency, email]);
 
   // Listen for emergency requests assigned specifically to this driver
   useEffect(() => {
@@ -2175,16 +2353,50 @@ export default function App() {
     }
   };
 
-  // Restore session on app start
+  // ── Restore session + app state on start ───────────────────────────────────
   useEffect(() => {
     const restoreSession = async () => {
       try {
-        const saved = await AsyncStorage.getItem('driverSession');
-        if (saved) {
-          const parsed = JSON.parse(saved) as Driver;
-          setDriver(parsed);
-          setScreen('home');
+        const [savedDriver, savedState] = await Promise.all([
+          AsyncStorage.getItem('driverSession'),
+          AsyncStorage.getItem(APP_STATE_KEY),
+        ]);
+
+        if (savedDriver) {
+          const parsedDriver = JSON.parse(savedDriver) as Driver;
+          setDriver(parsedDriver);
+
+          if (savedState) {
+            try {
+              const parsed = JSON.parse(savedState);
+              const isStale =
+                !parsed.savedAt ||
+                Date.now() - parsed.savedAt > STATE_MAX_AGE_MS;
+
+              if (!isStale && parsed.screen) {
+                // OTP screen can't be restored (time-sensitive)
+                const restoredScreen: Screen =
+                  parsed.screen === 'otp' ? 'email' : parsed.screen;
+                setScreen(restoredScreen);
+
+                if (parsed.homeAvailability)
+                  setHomeAvailability(parsed.homeAvailability);
+                if (parsed.markHomeAvailable !== undefined)
+                  setMarkHomeAvailable(parsed.markHomeAvailable);
+                if (parsed.activeEmergency && restoredScreen === 'maps')
+                  setActiveEmergency(parsed.activeEmergency);
+                if (parsed.email) setEmail(parsed.email);
+              } else {
+                setScreen('home');
+              }
+            } catch {
+              setScreen('home');
+            }
+          } else {
+            setScreen('home');
+          }
         }
+        // If no savedDriver, stay on 'email' (default)
       } catch (e) {
         console.error('Session restore error:', e);
       } finally {
@@ -2215,7 +2427,7 @@ export default function App() {
             location: FieldValue.delete(),
           });
       }
-      await AsyncStorage.removeItem('driverSession');
+      await AsyncStorage.multiRemove(['driverSession', APP_STATE_KEY]);
     } catch (e) {
       console.error('Logout error:', e);
     }
@@ -2232,7 +2444,7 @@ export default function App() {
     return (
       <View style={styles.splashContainer}>
         <Text style={styles.splashIcon}>🚑</Text>
-        <Text style={styles.splashTitle}>AmbulanceDriver</Text>
+        <Text style={styles.splashTitle}>AmbuGrid</Text>
         <ActivityIndicator
           size="large"
           color="#FF3B5C"
@@ -2248,7 +2460,7 @@ export default function App() {
     activeScreenContent = (
       <ProfileScreen
         driver={driver}
-        onBack={() => setScreen('home')}
+        onBack={() => setScreen(previousScreenRef.current)}
         onLogout={handleLogout}
       />
     );
@@ -2263,7 +2475,10 @@ export default function App() {
           setMarkHomeAvailable(false);
           setScreen('home');
         }}
-        onProfile={() => setScreen('profile')}
+        onProfile={navigateToProfile}
+        showHospitalModal={showHospitalModal}
+        setShowHospitalModal={setShowHospitalModal}
+        onRegisterSheetControls={registerSheetControls}
       />
     );
   } else if (screen === 'home' && driver) {
@@ -2273,7 +2488,7 @@ export default function App() {
         initialAvailability={homeAvailability}
         markAvailableOnMount={markHomeAvailable}
         onAvailabilityChange={setHomeAvailability}
-        onProfile={() => setScreen('profile')}
+        onProfile={navigateToProfile}
         onOpenMaps={() => setScreen('maps')}
       />
     );
@@ -2309,7 +2524,7 @@ export default function App() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1 }} {...(iosSwipePanResponder?.panHandlers ?? {})}>
       {activeScreenContent}
       <EmergencyRequestModal
         emergency={incomingEmergency}
@@ -2325,88 +2540,88 @@ export default function App() {
 // ═════════════════════════════════════════════════════════════════════════════
 // STYLES
 // ═════════════════════════════════════════════════════════════════════════════
-const styles = StyleSheet.create({
-  safeArea:      { flex: 1, backgroundColor: '#FFFFFF' },
+const createStyles = (w: number, h: number) => StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: '#FFFFFF' },
   scrollContent: { flexGrow: 1, backgroundColor: '#FFFFFF' },
   contentContainer: {
-    paddingHorizontal: 28, paddingTop: 16, paddingBottom: 40,
+    paddingHorizontal: wp(7, w), paddingTop: 16, paddingBottom: 40,
   },
 
   splashContainer: {
     flex: 1, backgroundColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center',
   },
-  splashIcon:  { fontSize: 56, marginBottom: 12 },
-  splashTitle: { fontSize: 24, fontWeight: '800', color: '#FF3B5C', letterSpacing: 0.5 },
+  splashIcon: { fontSize: ms(48, w), marginBottom: 12 },
+  splashTitle: { fontSize: ms(22, w), fontWeight: '800', color: '#FF3B5C', letterSpacing: 0.5 },
 
-  title:    { fontSize: 30, fontWeight: '800', color: '#111', marginBottom: 6 },
-  subtitle: { fontSize: 14, color: '#888', marginBottom: 24, lineHeight: 22 },
-  highlight:{ color: '#FF3B5C', fontWeight: '700' },
+  title: { fontSize: ms(28, w), fontWeight: '800', color: '#111', marginBottom: 6 },
+  subtitle: { fontSize: ms(13, w, 0.3), color: '#888', marginBottom: 24, lineHeight: 22 },
+  highlight: { color: '#FF3B5C', fontWeight: '700' },
 
   inputWrapper: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#F5F5F5', borderRadius: 14,
     marginBottom: 14, paddingHorizontal: 16,
   },
-  input:    { flex: 1, height: 52, fontSize: 15, color: '#222' },
-  otpInput: { fontSize: 26, fontWeight: '700', letterSpacing: 10, textAlign: 'center' },
+  input: { flex: 1, height: ms(48, w), fontSize: ms(14, w, 0.3), color: '#222' },
+  otpInput: { fontSize: ms(24, w), fontWeight: '700', letterSpacing: 10, textAlign: 'center' },
 
   primaryButton: {
-    backgroundColor: '#FF3B5C', borderRadius: 14, height: 56,
+    backgroundColor: '#FF3B5C', borderRadius: 14, height: ms(52, w),
     alignItems: 'center', justifyContent: 'center', marginBottom: 18,
     shadowColor: '#FF3B5C', shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
   },
-  disabledButton:    { opacity: 0.5 },
-  primaryButtonText: { color: '#FFF', fontSize: 17, fontWeight: '700', letterSpacing: 0.4 },
-  hintText:          { fontSize: 13, color: '#AAA', textAlign: 'center', marginBottom: 12 },
-  errorText:         { color: '#FF3B5C', fontSize: 13, marginBottom: 12, textAlign: 'center' },
-  secondaryRow:      { alignItems: 'center', marginTop: 4 },
-  secondaryText:     { fontSize: 14, color: '#888' },
+  disabledButton: { opacity: 0.5 },
+  primaryButtonText: { color: '#FFF', fontSize: ms(16, w, 0.3), fontWeight: '700', letterSpacing: 0.4 },
+  hintText: { fontSize: ms(12, w, 0.3), color: '#AAA', textAlign: 'center', marginBottom: 12 },
+  errorText: { color: '#FF3B5C', fontSize: ms(12, w, 0.3), marginBottom: 12, textAlign: 'center' },
+  secondaryRow: { alignItems: 'center', marginTop: 4 },
+  secondaryText: { fontSize: 14, color: '#888' },
 
-  avatar:     { backgroundColor: '#FF3B5C', alignItems: 'center', justifyContent: 'center' },
+  avatar: { backgroundColor: '#FF3B5C', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#FFF', fontWeight: '800' },
 
   homeHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 24, paddingVertical: 16,
+    paddingHorizontal: wp(6, w), paddingVertical: 16,
     borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
   },
-  homeWelcome:    { fontSize: 13, color: '#888', fontWeight: '500' },
-  homeDriverName: { fontSize: 20, fontWeight: '800', color: '#111', marginTop: 2 },
+  homeWelcome: { fontSize: ms(12, w, 0.3), color: '#888', fontWeight: '500' },
+  homeDriverName: { fontSize: ms(18, w), fontWeight: '800', color: '#111', marginTop: 2 },
 
   statusRow: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 24, paddingVertical: 10,
   },
-  statusDot:  { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
   statusText: { fontSize: 13, fontWeight: '600' },
 
   homeContent: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 28, paddingBottom: 20,
+    paddingHorizontal: wp(7, w), paddingBottom: 20,
   },
   emergencyTitle: {
-    fontSize: 26, fontWeight: '800', color: '#111',
+    fontSize: ms(24, w), fontWeight: '800', color: '#111',
     textAlign: 'center', marginBottom: 10,
   },
   emergencySubtitle: {
-    fontSize: 14, color: '#888',
+    fontSize: ms(13, w, 0.3), color: '#888',
     textAlign: 'center', lineHeight: 22, marginBottom: 48,
   },
 
   pulseContainer: { alignItems: 'center', justifyContent: 'center' },
-  pulseRing2: { position: 'absolute', width: 220, height: 220, borderRadius: 110 },
-  pulseRing1: { position: 'absolute', width: 185, height: 185, borderRadius: 93 },
+  pulseRing2: { position: 'absolute', width: clamp(wp(56, w), 180, 240), height: clamp(wp(56, w), 180, 240), borderRadius: clamp(wp(56, w), 180, 240) / 2 },
+  pulseRing1: { position: 'absolute', width: clamp(wp(47, w), 150, 200), height: clamp(wp(47, w), 150, 200), borderRadius: clamp(wp(47, w), 150, 200) / 2 },
   emergencyButton: {
-    width: 150, height: 150, borderRadius: 75,
+    width: clamp(wp(38, w), 120, 160), height: clamp(wp(38, w), 120, 160), borderRadius: clamp(wp(38, w), 120, 160) / 2,
     alignItems: 'center', justifyContent: 'center',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.4, shadowRadius: 16, elevation: 10,
   },
-  emergencyButtonIcon:  { fontSize: 36, marginBottom: 6 },
+  emergencyButtonIcon: { fontSize: ms(32, w), marginBottom: 6 },
   emergencyButtonLabel: {
-    color: '#FFF', fontSize: 13, fontWeight: '700',
+    color: '#FFF', fontSize: ms(12, w, 0.3), fontWeight: '700',
     textAlign: 'center', lineHeight: 18,
   },
 
@@ -2415,17 +2630,17 @@ const styles = StyleSheet.create({
     marginTop: 24, backgroundColor: '#FFF0F0',
     paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
   },
-  locationDot:  { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF3B5C', marginRight: 8 },
+  locationDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF3B5C', marginRight: 8 },
   locationText: { fontSize: 13, color: '#FF3B5C', fontWeight: '600' },
 
   bottomBar: {
     flexDirection: 'row', borderTopWidth: 1,
     borderTopColor: '#F0F0F0', paddingBottom: 8,
   },
-  bottomBarItem:        { flex: 1, alignItems: 'center', paddingVertical: 10 },
-  bottomBarIcon:        { fontSize: 22, marginBottom: 2 },
-  bottomBarLabel:       { fontSize: 11, color: '#AAA', fontWeight: '500' },
-  bottomBarIconActive:  { fontSize: 22, marginBottom: 2 },
+  bottomBarItem: { flex: 1, alignItems: 'center', paddingVertical: 10 },
+  bottomBarIcon: { fontSize: 22, marginBottom: 2 },
+  bottomBarLabel: { fontSize: 11, color: '#AAA', fontWeight: '500' },
+  bottomBarIconActive: { fontSize: 22, marginBottom: 2 },
   bottomBarLabelActive: { fontSize: 11, color: '#FF3B5C', fontWeight: '700' },
 
   navigationHeader: {
@@ -2435,8 +2650,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
   },
   navigationHeaderText: { flex: 1, marginHorizontal: 12 },
-  navigationTitle: { fontSize: 17, fontWeight: '800', color: '#111' },
-  navigationSubtitle: { fontSize: 12, color: '#888', marginTop: 2 },
+  navigationTitle: { fontSize: ms(16, w, 0.3), fontWeight: '800', color: '#111' },
+  navigationSubtitle: { fontSize: ms(11, w, 0.3), color: '#888', marginTop: 2 },
   map: { flex: 1 },
   routePanel: {
     backgroundColor: '#FFFFFF',
@@ -2521,7 +2736,7 @@ const styles = StyleSheet.create({
   },
   tripStepper: { paddingBottom: 10 },
   tripStep: {
-    width: 86,
+    width: wp(22, w),
     alignItems: 'center',
     marginRight: 6,
   },
@@ -2692,7 +2907,7 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    minHeight: screenHeight * 0.45,
+    minHeight: h * 0.45,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.15,
@@ -2854,7 +3069,7 @@ const styles = StyleSheet.create({
   navTurnText: { flex: 1 },
   navDistanceText: { color: '#FFF', fontSize: 22, fontWeight: '800', marginBottom: 2 },
   navInstructionText: { color: '#94A3B8', fontSize: 15, fontWeight: '600' },
-  
+
   fabContainer: {
     position: 'absolute',
     right: 16,
@@ -2931,19 +3146,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingVertical: 14,
     borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
   },
-  backButton:         { padding: 6 },
-  backArrow:          { fontSize: 22, color: '#FF3B5C', fontWeight: '700' },
+  backButton: { padding: 6 },
+  backArrow: { fontSize: 22, color: '#FF3B5C', fontWeight: '700' },
   profileHeaderTitle: { fontSize: 17, fontWeight: '800', color: '#111' },
 
   profileTop: {
     alignItems: 'center', paddingVertical: 28, backgroundColor: '#FFF5F7',
   },
   profileName: {
-    fontSize: 22, fontWeight: '800', color: '#111', marginTop: 12, marginBottom: 4,
+    fontSize: ms(20, w), fontWeight: '800', color: '#111', marginTop: 12, marginBottom: 4,
   },
-  profileRole:   { fontSize: 14, color: '#FF3B5C', fontWeight: '600', marginBottom: 10 },
+  profileRole: { fontSize: 14, color: '#FF3B5C', fontWeight: '600', marginBottom: 10 },
   verifiedBadge: { backgroundColor: '#E8F5E9', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 4 },
-  verifiedText:  { fontSize: 13, color: '#2E7D32', fontWeight: '600' },
+  verifiedText: { fontSize: 13, color: '#2E7D32', fontWeight: '600' },
 
   profileCard: {
     margin: 16, backgroundColor: '#FFF', borderRadius: 16,
@@ -2951,11 +3166,11 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
   },
-  profileRow:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14 },
+  profileRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 14 },
   profileRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
-  profileRowIcon:   { fontSize: 20, marginRight: 14, width: 28, textAlign: 'center' },
-  profileRowText:   { flex: 1 },
-  profileRowLabel:  {
+  profileRowIcon: { fontSize: 20, marginRight: 14, width: 28, textAlign: 'center' },
+  profileRowText: { flex: 1 },
+  profileRowLabel: {
     fontSize: 11, color: '#AAA', fontWeight: '600',
     marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5,
   },
