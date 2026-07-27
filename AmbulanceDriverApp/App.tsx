@@ -34,12 +34,14 @@ import Svg, { Path, Circle, Ellipse, Line, Polygon } from 'react-native-svg';
 import MapView, { Marker, Polyline, Region } from 'react-native-maps';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
+import {
+  EMAILJS_SERVICE_ID,
+  EMAILJS_TEMPLATE_ID,
+  EMAILJS_PUBLIC_KEY,
+  GOOGLE_MAPS_API_KEY,
+} from '@env';
 // ─── EmailJS ──────────────────────────────────────────────────────────────────
-const EMAILJS_SERVICE_ID = 'service_k1f34qu';
-const EMAILJS_TEMPLATE_ID = 'template_1ta0fsw';
-const EMAILJS_PUBLIC_KEY = 'l-W1Mxol-x9br9Typ';
 const OTP_EXPIRY_MS = 10 * 60 * 1000;
-const GOOGLE_MAPS_API_KEY = '***REMOVED***';
 
 const INITIAL_SCREEN = Dimensions.get('window');
 const { DriverLocationService } = NativeModules;
