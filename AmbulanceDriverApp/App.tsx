@@ -1,3 +1,4 @@
+
 /**
  * AmbulanceDriverApp — App.tsx
  * - Email OTP login (pure Firestore, no Firebase Auth)
@@ -2589,6 +2590,61 @@ const createStyles = (w: number, h: number) => StyleSheet.create({
   errorText: { color: '#FF3B5C', fontSize: ms(12, w, 0.3), marginBottom: 12, textAlign: 'center' },
   secondaryRow: { alignItems: 'center', marginTop: 4 },
   secondaryText: { fontSize: 14, color: '#888' },
+
+  // Terms & Conditions
+  tcHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
+  },
+  tcHeaderTitle: { fontSize: 17, fontWeight: '800', color: '#1E293B' },
+  tcContent: { padding: 20, paddingBottom: 40 },
+  tcBanner: {
+    backgroundColor: '#FFF0F0', borderRadius: 16, padding: 18,
+    borderWidth: 1, borderColor: '#FFD6DD', marginBottom: 20,
+  },
+  tcBadge: { fontSize: 11, fontWeight: '800', color: '#FF3B5C', letterSpacing: 0.8, marginBottom: 4 },
+  tcTitle: { fontSize: 18, fontWeight: '800', color: '#111', marginBottom: 4 },
+  tcSubtext: { fontSize: 12, color: '#888', fontWeight: '500' },
+  tcSection: { marginBottom: 20 },
+  tcSectionTitle: { fontSize: 15, fontWeight: '700', color: '#1E293B', marginBottom: 6 },
+  tcParagraph: { fontSize: 13, color: '#475569', lineHeight: 20 },
+  tcDoneButton: {
+    backgroundColor: '#FF3B5C', borderRadius: 14, height: 52,
+    alignItems: 'center', justifyContent: 'center', marginTop: 10,
+    shadowColor: '#FF3B5C', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
+  },
+  tcDoneButtonText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+
+  // Checkbox
+  tcCheckboxRow: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 14, paddingHorizontal: 2,
+  },
+  tcCheckboxRowHome: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 12, paddingHorizontal: 16,
+  },
+  checkboxTouch: { padding: 4, marginRight: 8 },
+  checkboxBox: {
+    width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+    borderColor: '#CBD5E1', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFF',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#22C55E', borderColor: '#22C55E',
+  },
+  checkboxCheckmark: { color: '#FFF', fontSize: 14, fontWeight: '800', lineHeight: 16 },
+  tcLabelText: { fontSize: 13, color: '#64748B', fontWeight: '500' },
+  tcLinkText: { color: '#FF3B5C', fontWeight: '700', textDecorationLine: 'underline' },
+
+  // Profile T&C card
+  profileTcCard: {
+    marginHorizontal: 16, marginBottom: 16, backgroundColor: '#FFF', borderRadius: 16,
+    borderWidth: 1, borderColor: '#F0F0F0', flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 18, paddingVertical: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  profileChevron: { fontSize: 18, color: '#94A3B8', fontWeight: '700', marginLeft: 8 },
 
   avatar: { backgroundColor: '#FF3B5C', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#FFF', fontWeight: '800' },
