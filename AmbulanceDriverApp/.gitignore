@@ -1,2 +1,4 @@
 vendor/
 .env
+android/app/google-services.json
+android/app/src/main/res/values/secrets.xml
