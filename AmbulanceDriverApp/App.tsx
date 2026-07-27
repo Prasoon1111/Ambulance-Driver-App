@@ -1297,7 +1297,7 @@ const MapsScreen = ({
 
       if (decoded.length > 0 && !directionsActive && !isAutoUpdate) {
         mapRef.current?.fitToCoordinates(decoded, {
-          edgePadding: { top: 90, right: 45, bottom: 260, left: 45 },
+          edgePadding: { top: 100, right: 50, bottom: 380, left: 50 },
           animated: true,
         });
       }
@@ -1459,12 +1459,17 @@ const MapsScreen = ({
         showsUserLocation={!directionsActive}
         showsMyLocationButton={false}
         followsUserLocation={false}
+        mapPadding={{ top: 80, right: 40, bottom: 360, left: 40 }}
         onPanDrag={() => {
           if (directionsActive && isFollowing) setIsFollowing(false);
         }}
       >
         {liveLocation && !directionsActive && (
-          <Marker coordinate={liveLocation} title="Driver location" pinColor="#3B82F6" />
+          <Marker
+            coordinate={liveLocation}
+            title="Driver location"
+            pinColor="#3B82F6"
+          />
         )}
         {liveLocation && directionsActive && (
           <Marker
@@ -1476,7 +1481,11 @@ const MapsScreen = ({
           </Marker>
         )}
         {destinationCoordinate && (
-          <Marker coordinate={destinationCoordinate} title="Patient destination" pinColor="#FF3B5C" />
+          <Marker
+            coordinate={destinationCoordinate}
+            title="Patient destination"
+            pinColor="#FF3B5C"
+          />
         )}
         {routeCoordinates.length > 0 && (
           <Polyline
@@ -2607,10 +2616,10 @@ const createStyles = (w: number, h: number) => StyleSheet.create({
   },
   emergencySubtitle: {
     fontSize: ms(13, w, 0.3), color: '#888',
-    textAlign: 'center', lineHeight: 22, marginBottom: 48,
+    textAlign: 'center', lineHeight: 22, marginBottom: clamp(h * 0.03, 16, 36),
   },
 
-  pulseContainer: { alignItems: 'center', justifyContent: 'center' },
+  pulseContainer: { alignItems: 'center', justifyContent: 'center', marginVertical: clamp(h * 0.02, 12, 28) },
   pulseRing2: { position: 'absolute', width: clamp(wp(56, w), 180, 240), height: clamp(wp(56, w), 180, 240), borderRadius: clamp(wp(56, w), 180, 240) / 2 },
   pulseRing1: { position: 'absolute', width: clamp(wp(47, w), 150, 200), height: clamp(wp(47, w), 150, 200), borderRadius: clamp(wp(47, w), 150, 200) / 2 },
   emergencyButton: {
@@ -2664,6 +2673,11 @@ const createStyles = (w: number, h: number) => StyleSheet.create({
     overflow: 'visible',
   },
   bottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
@@ -2795,7 +2809,7 @@ const createStyles = (w: number, h: number) => StyleSheet.create({
   },
   gpsButton: {
     width: 48,
-    height: 96,
+    alignSelf: 'stretch',
     marginLeft: 10,
     borderRadius: 12,
     borderWidth: 1,
