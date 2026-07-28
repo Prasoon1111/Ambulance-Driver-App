@@ -363,7 +363,81 @@ const NavigationArrow = ({ heading }: { heading: number }) => (
   </Svg>
 );
 
-type Screen = 'email' | 'otp' | 'home' | 'maps' | 'profile';
+type Screen = 'email' | 'otp' | 'home' | 'maps' | 'profile' | 'terms';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SCREEN: Terms & Conditions
+// ═════════════════════════════════════════════════════════════════════════════
+const TermsAndConditionsScreen = ({ onBack }: { onBack: () => void }) => {
+  const styles = useAppStyles();
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      {/* Header */}
+      <View style={styles.tcHeader}>
+        <TouchableOpacity onPress={onBack} style={styles.backButton} activeOpacity={0.7}>
+          <Text style={styles.backArrow}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.tcHeaderTitle}>Terms & Conditions</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.tcContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.tcBanner}>
+          <Text style={styles.tcBadge}>AMBUGRID DRIVER AGREEMENT</Text>
+          <Text style={styles.tcTitle}>Terms of Service & Operating Guidelines</Text>
+          <Text style={styles.tcSubtext}>Effective Date: July 2026 | Version 2.4</Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>1. Acceptance of Terms</Text>
+          <Text style={styles.tcParagraph}>
+            By downloading, registering, logging into, or using the AmbuGrid Ambulance Driver Application ("App"), you agree to be bound by these Terms and Conditions ("Terms"). If you do not agree, you may not access or use the App or receive emergency dispatch assignments.
+          </Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>2. Driver Qualification & Verification</Text>
+          <Text style={styles.tcParagraph}>
+            You represent and warrant that you hold a valid emergency vehicle driver's license, active medical transport certifications, and are affiliated with an authorized healthcare institution or emergency response fleet. You agree to provide accurate documentation and notify AmbuGrid immediately upon any change in your license status.
+          </Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>3. Location Tracking & Duty Availability</Text>
+          <Text style={styles.tcParagraph}>
+            When set to "Go On Duty", the App tracks your high-accuracy GPS location in real time to optimize emergency dispatch and route selection. You consent to background and foreground location tracking while on duty. Location tracking ceases when you switch off duty or sign out.
+          </Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>4. Emergency Response Protocols</Text>
+          <Text style={styles.tcParagraph}>
+            Drivers must adhere strictly to traffic safety laws, regional emergency vehicle protocols, and hospital dispatch instructions. You acknowledge that emergency assignments are allocated based on proximity, traffic conditions, and vehicle readiness.
+          </Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>5. Patient Confidentiality & Data Privacy</Text>
+          <Text style={styles.tcParagraph}>
+            All patient data, medical information, and pickup locations received via the App are confidential. You agree to not record, copy, share, or disclose patient details to unauthorized third parties in accordance with applicable healthcare data protection regulations.
+          </Text>
+        </View>
+
+        <View style={styles.tcSection}>
+          <Text style={styles.tcSectionTitle}>6. Liability & Service Disclaimer</Text>
+          <Text style={styles.tcParagraph}>
+            AmbuGrid provides the dispatch network on an "as-is" basis. Drivers remain solely responsible for safe vehicle operation, transport decisions, and adherence to local emergency transport regulations.
+          </Text>
+        </View>
+
+        <TouchableOpacity style={styles.tcDoneButton} onPress={onBack} activeOpacity={0.85}>
+          <Text style={styles.tcDoneButtonText}>I Understand & Agree</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
 
 // ═════════════════════════════════════════════════════════════════════════════
 // SCREEN 1 — Email Entry
@@ -469,14 +543,15 @@ const EmailScreen = ({
 // SCREEN 2 — OTP Verification
 // ═════════════════════════════════════════════════════════════════════════════
 const OtpScreen = ({
-  email, expectedOtp, otpExpiry, onVerified, onBack,
+  email, expectedOtp, otpExpiry, onVerified, onBack, onOpenTerms,
 }: {
   email: string; expectedOtp: string; otpExpiry: number;
-  onVerified: () => void; onBack: () => void;
+  onVerified: () => void; onBack: () => void; onOpenTerms: () => void;
 }) => {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [tcAccepted, setTcAccepted] = useState(true);
   const styles = useAppStyles();
   const [timeLeft, setTimeLeft] = useState(
     Math.ceil((otpExpiry - Date.now()) / 1000),
@@ -498,6 +573,7 @@ const OtpScreen = ({
     const cleaned = otp.trim();
     if (cleaned.length !== 6) { setError('Please enter the 6-digit OTP.'); return; }
     if (Date.now() > otpExpiry) { setError('OTP expired. Go back and request a new one.'); return; }
+    if (!tcAccepted) { setError('Please agree to the Terms & Conditions to sign in.'); return; }
     if (cleaned !== expectedOtp) { setError('Incorrect OTP. Please try again.'); return; }
     setLoading(true);
     onVerified();
@@ -546,16 +622,39 @@ const OtpScreen = ({
             <TouchableOpacity
               style={[
                 styles.primaryButton,
-                (loading || timeLeft === 0) && styles.disabledButton,
+                (loading || timeLeft === 0 || !tcAccepted) && styles.disabledButton,
               ]}
               onPress={handleVerify}
-              disabled={loading || timeLeft === 0}
+              disabled={loading || timeLeft === 0 || !tcAccepted}
               activeOpacity={0.85}
             >
               {loading
                 ? <ActivityIndicator color="#FFF" />
                 : <Text style={styles.primaryButtonText}>Verify & Sign In  ›</Text>}
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.tcCheckboxRow}
+              onPress={() => setTcAccepted(!tcAccepted)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.checkboxBox, tcAccepted && styles.checkboxBoxChecked]}>
+                {tcAccepted && <Text style={styles.checkboxCheckmark}>✓</Text>}
+              </View>
+              <Text style={[styles.tcLabelText, { marginLeft: 8 }]}>
+                I agree to the{' '}
+                <Text
+                  style={styles.tcLinkText}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    onOpenTerms();
+                  }}
+                >
+                  Terms & Conditions
+                </Text>
+              </Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.secondaryRow}
               onPress={onBack}
@@ -727,7 +826,7 @@ const HomeScreen = ({
           <Text style={styles.homeDriverName}>{driver['Name']}</Text>
         </View>
         <TouchableOpacity onPress={onProfile} activeOpacity={0.8}>
-          <Avatar name={driver['Name']} size={48} />
+          <Avatar name={driver['Name'] || ''} size={48} />
         </TouchableOpacity>
       </View>
 
@@ -1450,7 +1549,7 @@ const MapsScreen = ({
           <Text style={styles.navigationSubtitle}>{driver['Hospital Name']}</Text>
         </View>
         <TouchableOpacity onPress={onProfile} activeOpacity={0.8}>
-          <Avatar name={driver['Name']} size={40} />
+          <Avatar name={driver['Name'] || ''} size={40} />
         </TouchableOpacity>
       </View>
 
@@ -1660,7 +1759,7 @@ const MapsScreen = ({
 
           <TouchableOpacity
             style={[styles.primaryButton, routeLoading && styles.disabledButton]}
-            onPress={fetchRoute}
+            onPress={() => fetchRoute()}
             disabled={routeLoading}
             activeOpacity={0.85}
           >
@@ -1823,9 +1922,9 @@ const MapsScreen = ({
 // SCREEN 5 — Profile (with Sign Out)
 // ═════════════════════════════════════════════════════════════════════════════
 const ProfileScreen = ({
-  driver, onBack, onLogout,
+  driver, onBack, onLogout, onOpenTerms,
 }: {
-  driver: Driver; onBack: () => void; onLogout: () => void;
+  driver: Driver; onBack: () => void; onLogout: () => void; onOpenTerms: () => void;
 }) => {
   const [profileData, setProfileData] = useState<Driver | null>(driver);
   const [loading, setLoading] = useState<boolean>(true);
@@ -1859,7 +1958,7 @@ const ProfileScreen = ({
         if (docRef) {
           unsubscribe = docRef.onSnapshot(
             snapshot => {
-              if (snapshot.exists) {
+              if (typeof (snapshot as any).exists === 'function' ? (snapshot as any).exists() : snapshot.exists) {
                 const data = snapshot.data();
                 setProfileData({ ...data, docId: snapshot.id } as Driver);
               } else {
@@ -1988,6 +2087,20 @@ const ProfileScreen = ({
               </View>
             ))}
           </View>
+
+          {/* Terms & Conditions permanent link */}
+          <TouchableOpacity
+            style={styles.profileTcCard}
+            onPress={onOpenTerms}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.profileRowIcon}>📜</Text>
+            <View style={styles.profileRowText}>
+              <Text style={styles.profileRowLabel}>LEGAL & COMPLIANCE</Text>
+              <Text style={styles.profileRowValue}>Terms & Conditions</Text>
+            </View>
+            <Text style={styles.profileChevron}>›</Text>
+          </TouchableOpacity>
 
           {/* Sign Out */}
           <TouchableOpacity
@@ -2148,6 +2261,10 @@ export default function App() {
     previousScreenRef.current = screen;
     setScreen('profile');
   }, [screen]);
+  const navigateToTerms = useCallback(() => {
+    previousScreenRef.current = screen;
+    setScreen('terms');
+  }, [screen]);
 
   // ── Back handler (Android back button / back gesture) ──────────────────────
   const handleBackRef = useRef<() => boolean>(() => false);
@@ -2165,6 +2282,7 @@ export default function App() {
 
       // 3. Screen-specific behavior
       switch (screen) {
+        case 'terms':
         case 'profile':
           setScreen(previousScreenRef.current);
           return true;
@@ -2468,12 +2586,19 @@ export default function App() {
 
   let activeScreenContent = null;
 
-  if (screen === 'profile' && driver) {
+  if (screen === 'terms') {
+    activeScreenContent = (
+      <TermsAndConditionsScreen
+        onBack={() => setScreen(previousScreenRef.current)}
+      />
+    );
+  } else if (screen === 'profile' && driver) {
     activeScreenContent = (
       <ProfileScreen
         driver={driver}
         onBack={() => setScreen(previousScreenRef.current)}
         onLogout={handleLogout}
+        onOpenTerms={navigateToTerms}
       />
     );
   } else if (screen === 'maps' && driver) {
@@ -2519,6 +2644,7 @@ export default function App() {
           setScreen('home');
         }}
         onBack={() => { setOtp(''); setDriver(null); setScreen('email'); }}
+        onOpenTerms={navigateToTerms}
       />
     );
   } else {
